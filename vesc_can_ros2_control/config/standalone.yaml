@@ -1,0 +1,31 @@
+/**/vesc_can_ros2_control:
+  ros__parameters:
+    can_tx_topic: /can/tx
+    can_rx_topic: /can/rx
+    update_period_ms: 10
+    state_array_publish_period_ms: 100
+    auto_enable_once: false
+    motors: [drive_joint, steer_joint]
+    drive_joint:
+      logical_id: 1
+      controller_id: 11
+      command_interface: velocity
+      pole_pairs: 7.0
+      gear_ratio: 1.0
+      max_rpm: 190.0
+      rpm_slew_rate: 955.0
+      startup_current_a: 0.0
+      feedback_timeout_ms: 300
+      command_timeout_ms: 300
+      require_tachometer: true
+    steer_joint:
+      logical_id: 2
+      controller_id: 21
+      command_interface: position
+      pole_pairs: 7.0
+      gear_ratio: 1.0
+      zero_offset_rad: 0.0
+      min_position: -1.0
+      max_position: 1.0
+      feedback_timeout_ms: 300
+      command_timeout_ms: 300

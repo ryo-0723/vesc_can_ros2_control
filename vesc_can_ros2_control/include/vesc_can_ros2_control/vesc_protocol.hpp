@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-#include <cmath>
 #include <cstdint>
 #include "can_msgs/msg/frame.hpp"
 
@@ -9,76 +7,37 @@ namespace vesc_can_ros2_control::protocol
 {
 constexpr uint32_t SET_CURRENT_ID = 1;
 constexpr uint32_t SET_RPM_ID = 3;
+constexpr uint32_t SET_POSITION_ID = 4;
 constexpr uint32_t STATUS_1_ID = 9;
-constexpr int64_t MOTOR_POLES = 14;   // モーターの極数
+constexpr uint32_t STATUS_4_ID = 16;
+constexpr uint32_t STATUS_5_ID = 27;
 
 struct Status1
 {
-  uint8_t controller_id;
-  float current_a;
-  int32_t erpm;
+  uint8_t controller_id{};
+  int32_t erpm{};
+  double current_a{};
+  double duty_cycle{};
+};
+struct Status4
+{
+  uint8_t controller_id{};
+  double temperature_fet_c{};
+  double temperature_motor_c{};
+  double input_current_a{};
+  double position_deg{};
+};
+struct Status5
+{
+  uint8_t controller_id{};
+  int32_t tachometer{};
+  double input_voltage_v{};
 };
 
-/// @brief escに送る速度制御用のcanFrame生成
-/// @param id モータID
-/// @param erpm 実際のrpm * 極数
-/// @return canFrame
-inline can_msgs::msg::Frame make_set_rpm_frame(uint8_t id, int32_t erpm)
-{
-  can_msgs::msg::Frame frame{};
-  frame.id = (SET_RPM_ID << 8) | id;
-  frame.is_extended = true;
-  frame.dlc = 4;
-
-  const auto value = static_cast<uint32_t>(erpm);
-  for (std::size_t i = 0; i < 4; ++i) {
-    frame.data[i] = static_cast<uint8_t>((value >> (24 - 8 * i)) & 0xFF);
-  }
-  return frame;
-}
-
-/// @brief escに送る電流制御用のcanFrame生成
-/// @param id モータID
-/// @param current_a 電流(A)
-/// @return canFrame
-inline can_msgs::msg::Frame make_set_current_frame(uint8_t id, double current_a)
-{
-  can_msgs::msg::Frame frame{};
-  frame.id = (SET_CURRENT_ID << 8) | id;
-  frame.is_extended = true;
-  frame.dlc = 4;
-
-  const auto value =
-    static_cast<uint32_t>(static_cast<int32_t>(std::lround(current_a * 1000.0)));
-  for (std::size_t i = 0; i < 4; ++i) {
-    frame.data[i] = static_cast<uint8_t>((value >> (24 - 8 * i)) & 0xFF);
-  }
-  return frame;
-}
-
-/// @brief status1のcanFrameをデコードして，速度データの取り出し
-/// @param frame
-/// @param status
-/// @return true:デコードした false:デコードしていない
-inline bool decode_status_1(const can_msgs::msg::Frame & frame, Status1 & status)
-{
-  if (!frame.is_extended || frame.is_rtr || frame.is_error || frame.dlc != 8 ||
-    (frame.id >> 8) != STATUS_1_ID)
-  {
-    return false;
-  }
-  status.controller_id = static_cast<uint8_t>(frame.id & 0xFF);
-  const uint32_t rpm =
-    (static_cast<uint32_t>(frame.data[0]) << 24) |
-    (static_cast<uint32_t>(frame.data[1]) << 16) |
-    (static_cast<uint32_t>(frame.data[2]) << 8) |
-    static_cast<uint32_t>(frame.data[3]);
-  const uint16_t raw_current =
-    (static_cast<uint32_t>(frame.data[4]) << 8) |
-    static_cast<uint32_t>(frame.data[5]);
-
-  status.erpm = static_cast<int32_t>(rpm);
-  status.current_a = static_cast<float>(static_cast<int16_t>(raw_current)) / 10.0f;
-  return true;
-}
-} // namespace vesc_can_ros2_control::protocol
+can_msgs::msg::Frame make_set_rpm_frame(uint8_t id, int32_t erpm);
+can_msgs::msg::Frame make_set_current_frame(uint8_t id, double current_a);
+can_msgs::msg::Frame make_set_position_frame(uint8_t id, double position_deg);
+bool decode_status_1(const can_msgs::msg::Frame & frame, Status1 & status);
+bool decode_status_4(const can_msgs::msg::Frame & frame, Status4 & status);
+bool decode_status_5(const can_msgs::msg::Frame & frame, Status5 & status);
+}  // namespace vesc_can_ros2_control::protocol

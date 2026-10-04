@@ -1,17 +1,58 @@
 # vesc_can_ros2_control
 
-VESCのCANフレーム生成・受信処理を土台として、ros2_control対応を開発するリポジトリです。
-現在は通常のROS 2ノードによるRPM・電流指令とSTATUS1の受信に対応しています。
-ros2_controlのハードウェアプラグインは今後追加します。
+ROS 2 driver for **native VESC CAN frames**, with a multi-joint `ros2_control`
+SystemInterface and a standalone topic node. Intended for CAN bridges, including
+Zenoh/pico gateways that preserve `can_msgs/msg/Frame` IDs, flags, DLC and payload.
+It does not implement USB/UART packet transport or a Zenoh/pico gateway.
 
-## パッケージ
+Initial supported build target: **ROS 2 Lyrical / ros2_control 6**. Other distributions
+have different hardware APIs and have not been validated. This is a development
+package; no ROS apt release or physical-hardware validation is claimed.
 
-- [vesc_can_ros2_control](vesc_can_ros2_control/README.md): VESC用CANプロトコルと`vesc_node`。
-- `vesc_can_interfaces`: 既存ノードの指令・状態メッセージとサービス定義。
+Local validation: Lyrical build and 17 automated checks passed. Driver and integration
+tests also passed with `rmw_zenoh_cpp` and a local Zenoh router. The physical CAN bus
+and Zenoh pico gateway have not been exercised.
 
-独自インターフェースは、既存のROSパッケージとの名前の重複を避けるため、
-`actuator_msgs`から`vesc_can_interfaces`へ変更しています。定義内容は同じです。
+- [Driver, configuration, examples and limitations (日本語)](vesc_can_ros2_control/README.md)
+- [Architecture and concurrency](docs/architecture.md)
+- [Release preparation](docs/releasing.md)
+- `vesc_can_interfaces`: retained legacy messages; the hardware plugin uses standard
+  ros2_control interfaces, and the CAN boundary uses `can_msgs/msg/Frame`.
 
-## コードの出典
+## Build and test
 
-初期のVESC実装は[rox2026のhardware_driver](https://github.com/rodep-soft/rox2026/tree/main/ros2_ws/src/hardware_driver)を基にしています。
+Place this repository under a ROS workspace's `src` directory, then run from the
+workspace root:
+
+```bash
+source /opt/ros/lyrical/setup.bash
+rosdep install --from-paths src --ignore-src -r -y --rosdistro lyrical
+colcon build --cmake-args -DBUILD_TESTING=ON
+source install/setup.bash
+colcon test
+colcon test-result --verbose
+```
+
+## Bench demo without a motor
+
+Use isolated CAN topics when physical bridges are running:
+
+```bash
+ros2 launch vesc_can_ros2_control vesc_control.launch.py use_mock:=true \
+  can_tx_topic:=/bench/can/tx can_rx_topic:=/bench/can/rx
+ros2 topic pub -r 20 /drive_controller/commands std_msgs/msg/Float64MultiArray '{data: [1.0]}'
+ros2 topic pub -r 20 /steer_controller/commands std_msgs/msg/Float64MultiArray '{data: [0.25]}'
+```
+
+The example forwarding controllers retain their last commands. They are for bench
+verification and do not provide an upstream command timeout. Use a controller or
+supervisor with a watchdog for the actual robot.
+
+## Provenance
+
+The original standalone node and legacy interfaces were based on
+[rox2026/hardware_driver](https://github.com/rodep-soft/rox2026/tree/main/ros2_ws/src/hardware_driver).
+Their initial package names were `hardware_driver` and `actuator_msgs`.
+Native frame layouts were checked against
+[VESC firmware comm_can.c](https://github.com/vedderb/bldc/blob/master/comm/comm_can.c).
+No VESC firmware source or sbgisen implementation is bundled.

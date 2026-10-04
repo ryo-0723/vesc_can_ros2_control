@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<robot name="vesc_can_example">
+  <link name="base_link"/>
+  <link name="drive_link"/>
+  <link name="steer_link"/>
+  <joint name="drive_joint" type="continuous">
+    <parent link="base_link"/><child link="drive_link"/><axis xyz="0 1 0"/>
+  </joint>
+  <joint name="steer_joint" type="revolute">
+    <parent link="base_link"/><child link="steer_link"/><axis xyz="0 0 1"/>
+    <limit lower="-1.0" upper="1.0" effort="1.0" velocity="1.0"/>
+  </joint>
+  <ros2_control name="VescCanSystem" type="system">
+    <hardware>
+      <plugin>vesc_can_ros2_control/VescSystem</plugin>
+      <param name="can_tx_topic">/can/tx</param>
+      <param name="can_rx_topic">/can/rx</param>
+      <param name="send_period_ms">10</param>
+      <param name="activation_timeout_ms">2000</param>
+    </hardware>
+    <joint name="drive_joint">
+      <param name="controller_id">11</param><param name="pole_pairs">7</param>
+      <param name="gear_ratio">1.0</param><param name="direction">1</param>
+      <param name="max_velocity">20.0</param><param name="velocity_slew_rate">100.0</param>
+      <param name="feedback_timeout_ms">300</param><param name="command_timeout_ms">300</param>
+      <command_interface name="velocity"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+      <state_interface name="current"/><state_interface name="input_voltage"/>
+    </joint>
+    <joint name="steer_joint">
+      <param name="controller_id">21</param><param name="pole_pairs">7</param>
+      <param name="gear_ratio">1.0</param><param name="direction">1</param>
+      <param name="zero_offset_rad">0.0</param>
+      <param name="min_position">-1.0</param><param name="max_position">1.0</param>
+      <param name="feedback_timeout_ms">300</param><param name="command_timeout_ms">300</param>
+      <command_interface name="position"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+      <state_interface name="temperature_fet"/>
+    </joint>
+  </ros2_control>
+</robot>

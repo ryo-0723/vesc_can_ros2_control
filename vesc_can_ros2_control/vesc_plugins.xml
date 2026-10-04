@@ -1,0 +1,7 @@
+<library path="vesc_hardware">
+  <class name="vesc_can_ros2_control/VescSystem"
+         type="vesc_can_ros2_control::VescSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>Multiple VESC controllers over ROS CAN frame topics.</description>
+  </class>
+</library>
