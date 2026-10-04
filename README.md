@@ -1,0 +1,2 @@
+# vesc_can_ros2_control
+VESCのcanFrameを生成，受信し，ros2_controlを使用するためのパッケージです
