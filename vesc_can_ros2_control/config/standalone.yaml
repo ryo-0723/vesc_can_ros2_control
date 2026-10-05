@@ -3,11 +3,10 @@
     can_tx_topic: /can/tx
     can_rx_topic: /can/rx
     update_period_ms: 10
-    state_array_publish_period_ms: 100
+    state_publish_period_ms: 100
     auto_enable_once: false
     motors: [drive_joint, steer_joint]
     drive_joint:
-      logical_id: 1
       controller_id: 11
       command_interface: velocity
       pole_pairs: 7.0
@@ -19,7 +18,6 @@
       command_timeout_ms: 300
       require_tachometer: true
     steer_joint:
-      logical_id: 2
       controller_id: 21
       command_interface: position
       pole_pairs: 7.0

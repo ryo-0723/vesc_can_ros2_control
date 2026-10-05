@@ -1,7 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 project(vesc_can_ros2_control)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -14,11 +12,16 @@ find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
-find_package(vesc_can_interfaces REQUIRED)
+find_package(vesc_msgs REQUIRED)
 find_package(Threads REQUIRED)
 
-add_library(vesc_can SHARED src/vesc_protocol.cpp src/driver_core.cpp src/can_transport.cpp)
+add_library(vesc_can SHARED
+  src/vesc_protocol.cpp
+  src/driver_core.cpp
+  src/can_transport.cpp)
+target_compile_features(vesc_can PUBLIC cxx_std_20)
 target_include_directories(vesc_can PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -30,12 +33,14 @@ target_link_libraries(vesc_hardware PUBLIC vesc_can hardware_interface::hardware
 pluginlib_export_plugin_description_file(hardware_interface vesc_plugins.xml)
 
 add_executable(vesc_node src/vesc_node.cpp)
-target_link_libraries(vesc_node PRIVATE vesc_can ${sensor_msgs_TARGETS}
-  ${diagnostic_msgs_TARGETS} ${std_srvs_TARGETS} ${vesc_can_interfaces_TARGETS})
+add_library(vesc_telemetry SHARED src/vesc_telemetry.cpp)
+target_link_libraries(vesc_telemetry PUBLIC vesc_can ${vesc_msgs_TARGETS})
+target_link_libraries(vesc_node PRIVATE vesc_telemetry ${sensor_msgs_TARGETS}
+  ${diagnostic_msgs_TARGETS} ${std_msgs_TARGETS} ${std_srvs_TARGETS})
 add_executable(fake_vesc_node src/fake_vesc_node.cpp)
 target_link_libraries(fake_vesc_node PRIVATE vesc_can)
 
-install(TARGETS vesc_can vesc_hardware EXPORT export_vesc
+install(TARGETS vesc_can vesc_hardware vesc_telemetry EXPORT export_vesc
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(TARGETS vesc_node fake_vesc_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
@@ -47,9 +52,13 @@ if(BUILD_TESTING)
   target_link_libraries(test_protocol_core vesc_can)
   ament_add_gtest(test_transport test/test_transport.cpp TIMEOUT 30)
   target_link_libraries(test_transport vesc_can)
+  ament_add_gtest(test_system test/test_system.cpp)
+  target_link_libraries(test_system vesc_hardware)
+  ament_add_gtest(test_telemetry test/test_telemetry.cpp)
+  target_link_libraries(test_telemetry vesc_telemetry)
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_integration.py TIMEOUT 60)
 endif()
 ament_export_targets(export_vesc HAS_LIBRARY_TARGET)
-ament_export_dependencies(can_msgs hardware_interface pluginlib rclcpp rclcpp_lifecycle Threads)
+ament_export_dependencies(can_msgs hardware_interface pluginlib rclcpp rclcpp_lifecycle vesc_msgs Threads)
 ament_package()

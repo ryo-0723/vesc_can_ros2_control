@@ -1,0 +1,34 @@
+BasedOnStyle: LLVM
+Language: Cpp
+ColumnLimit: 100
+IndentWidth: 2
+AccessModifierOffset: -2
+NamespaceIndentation: None
+PointerAlignment: Right
+ReferenceAlignment: Pointer
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterStruct: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterControlStatement: Never
+  BeforeElse: false
+  BeforeCatch: false
+IndentCaseLabels: true
+SpaceBeforeParens: ControlStatements
+IncludeBlocks: Regroup
+ContinuationIndentWidth: 2
+ConstructorInitializerIndentWidth: 2
+AlignAfterOpenBracket: DontAlign
+SpacesBeforeTrailingComments: 2
+IncludeCategories:
+  - Regex: '^<'
+    Priority: 1
+  - Regex: '^"'
+    Priority: 2

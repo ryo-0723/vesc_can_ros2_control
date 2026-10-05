@@ -9,8 +9,8 @@ USB/UART に依存せず、SocketCAN ブリッジや Zenoh pico の中継器へ�
 | 使い方 | 起動するもの | 指令と状態 |
 |---|---|---|
 | ros2_control | controller_manager が `vesc_can_ros2_control/VescSystem` をロード | 関節の velocity [rad/s] または position [rad] |
-| 通常ノード | `vesc_node` | 標準 JointState トピック、または既存の独自メッセージ |
-| 模擬 VESC | `fake_vesc_node` | CAN 指令を受信して STATUS1/4/5 を返すテスト用ノード |
+| 通常ノード | `vesc_node` | 標準 JointState / Float64 指令、vesc_msgs の状態配信 |
+| 模擬 VESC | `fake_vesc_node` | CAN 指令を受信して STATUS1〜6 を返すテスト用ノード |
 
 同じ CAN ID を制御する通常ノードと hardware plugin は同時に起動しないでください。
 停止中もゼロ電流フレームを定期送信するため、同じ ID への送信者は 1 つにします。
@@ -91,12 +91,23 @@ ros2 topic pub -r 20 /vesc_can_ros2_control/joint_commands sensor_msgs/msg/Joint
 | ~/joint_states | sensor_msgs/msg/JointState | 関節 rad / rad/s、effort は空 |
 | ~/enable | std_srvs/srv/SetBool | true: 有効化と異常解除、false: 無効化 |
 | /diagnostics | diagnostic_msgs/msg/DiagnosticArray | 接続・有効状態・ドライバ異常 |
-| /vesc/target, /vesc/target_array | vesc_can_interfaces/msg/ActuatorTarget, ActuatorTargetArray | logical_id 指定、駆動はモータ機械 RPM、操舵は関節 rad |
-| /vesc/state, /vesc/state_array | vesc_can_interfaces/msg/ActuatorState, ActuatorStateArray | velocity はモータ機械 RPM、position は関節 rad、torque_nm は NaN |
+| ~/motors/<motor_name>/command | std_msgs/msg/Float64 | 選択したモードの関節 rad/s または関節 rad |
+| ~/motors/<motor_name>/state | vesc_msgs/msg/VescStateStamped | 上流定義のモータ生値。speed は ERPM、pid_pos_now はモータ PID 角度 [deg] |
 
-旧速度入力は範囲内へクランプします。JointState と ros2_control では範囲外や
-NaN/Inf の指令を異常として停止します。独自メッセージの定義は変更していません。
-SetPosition.srv は定義を保持していますが、このノードに対応するサービスはありません。
+指令は関節単位です。`Float64` と `JointState` は同じ変換・範囲検査・期限切れ停止を
+使用します。NaN/Inf や範囲外の指令は異常停止になります。
+`VescStateStamped` は関節単位へ変換する前の VESC 値を配信します。
+複数台ではトピック名の motor_name と `state.controller_id` で識別できます。
+
+```bash
+ros2 topic pub -r 20 /vesc_can_ros2_control/motors/drive_joint/command \
+  std_msgs/msg/Float64 '{data: 1.0}'
+ros2 topic echo /vesc_can_ros2_control/motors/drive_joint/state
+```
+
+旧独自メッセージ、SetPosition.srv、logical_id 設定は廃止しました。
+状態値の取得範囲、未取得値、旧 API の移行は [メッセージ対応表](../docs/messages.md) を参照してください。
+通常ノードの状態・診断周期は `state_publish_period_ms` (既定 100 ms) で指定します。
 
 通常ノードだけの従来設定 max_rpm / rpm_slew_rate はモータ機械 RPM / RPM毎秒です。
 pole_pairs の既定は 7。startup_current_a の既定は **0** に変更しており、
@@ -109,14 +120,17 @@ CAN トピックのパラメータ未指定時の既定値は従来の /socketca
 送信側の Frame は拡張 ID、DLC=4、固定 8 バイト配列の先頭 4 バイトを使用します。
 ID は `(packet_id << 8) | controller_id`、値は big endian の符号付き int32。
 SET_CURRENT=1 (A×1000)、SET_RPM=3 (ERPM)、SET_POS=4 (deg×1e6) を使用します。
-受信は STATUS1=9 (DLC=8)、STATUS4=16 (DLC=8)、STATUS5=27 (DLC=6)。
+受信は STATUS1=9、STATUS2=14、STATUS3=15、STATUS4=16、STATUS5=27、STATUS6=58。
+公式送信形式はすべて DLC=8 です。STATUS5 は末尾 2 バイトが予約領域で、
+既存の 6 バイト形式も受け付けます。中継器は元の DLC と全ペイロードを保持してください。
 標準 ID、RTR、エラーフレーム、不一致の DLC、未登録 ID は状態更新に使いません。
 
 VESC Tool で必要な STATUS の定期送信を有効化してください。速度には STATUS1、
 操舵位置には STATUS1 と STATUS4、駆動の位置状態には STATUS1 と STATUS5 が必要です。
-STATUS4/5 の任意の温度・電圧状態は期限切れで NaN になります。
-ネイティブ STATUS1/4/5 には VESC の fault code はないため、実機故障コードの取得は
-未対応です。独自 state の fault_code=1 はドライバ異常で、VESC 故障番号ではありません。
+STATUS2/3/6 は任意の診断・テレメトリで、未受信でも制御の有効化を妨げません。
+浮動小数点の状態値は各 STATUS の期限切れで NaN になります。
+ネイティブ STATUS1〜6 には VESC の fault code はないため、実機故障コードの取得は
+未対応です。VescState の fault_code は -1 (未取得)、ドライバ異常は /diagnostics に配信します。
 
 Tx は Reliable/Volatile、Rx は SensorDataQoS (BestEffort/Volatile)。中継側の QoS を
 合わせてください。RMW の ContentFilter に依存せず、受信後に CAN ID を検査します。
@@ -140,6 +154,6 @@ STATUS の送信元時刻は検証していません。DDS/Zenoh/CAN キュー�
 
 colcon test はネイティブフレームの既知値、符号、DLC、ID、単位変換、2 台の状態、
 タイムアウト、異常の保持・解除、独立 executor、実際の controller_manager からの
-プラグイン読み込みと駆動/操舵操作、通常ノードの旧/標準トピック操作を確認します。
+プラグイン読み込みと駆動/操舵操作、通常ノードの標準指令・上流テレメトリの単位と未取得値を確認します。
 fake_vesc_node はプロトコルのテスト用で、物理モデル・ブレーキ・PID・電流制限の
 実機動作を再現しません。実機の検証は別途必要です。

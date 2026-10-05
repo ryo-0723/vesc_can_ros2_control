@@ -13,8 +13,9 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>std_srvs</depend>
-  <depend>vesc_can_interfaces</depend>
+  <depend>vesc_msgs</depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>forward_command_controller</exec_depend>
@@ -22,7 +23,6 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>launch_testing_ament_cmake</test_depend>
   <test_depend>launch_testing_ros</test_depend>

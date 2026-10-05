@@ -37,7 +37,7 @@ read は状態のコピー、write は最新指令を共有領域へ渡す処理
 延期します。鮮度期限の検査は続けるため、無期限に古い指令を使い続けません。
 
 CAN executor が一定周期で最新指令を取り出し、変換・制限・異常検査・Frame 送信を
-行います。通常ノードでは単一モータ／配列の指令を、hardware では全関節の指令を
+行います。通常ノードでは Float64 の単一モータ／JointState の複数関節指令を、hardware では全関節の指令を
 まとめて受け渡します。中間の指令はまとめられ、motor 数を超える指令キューは作りません。
 受信コールバックは同じ executor で STATUS を状態へ反映します。
 
@@ -75,3 +75,10 @@ ros2_control の ActuatorInterface があり、USB/UART 接続では有用な候
 本パッケージの native CAN Frame + Zenoh pico 経路へそのまま接続できるものではありません。
 通信の置き換え、CAN STATUS の状態取得、複数関節の System 化が必要です。
 本実装は同プロジェクトのコードをコピーせず、CAN 境界を共有する構成を採用します。
+
+通常ノードの状態配信はモータごとに `vesc_msgs/msg/VescStateStamped` の publisher を
+持ちます。同じ 1 つの状態配信タイマーで全台を処理し、モータごとのノードやスレッドは
+追加しません。上流メッセージの生成はメイン executor の状態配信周期で行い、
+ros2_control の read/write では行いません。STATUS1〜6 を解釈できる実装でも、
+全 STATUS を常時送信する必要はありません。制御に必要な種類と診断用の低頻度データを
+VESC Tool 側で選び、CAN と Zenoh の負荷を調整してください。

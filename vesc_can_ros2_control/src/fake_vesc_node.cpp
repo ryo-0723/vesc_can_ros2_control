@@ -1,109 +1,222 @@
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
-#include "vesc_can_ros2_control/driver_core.hpp"
+
 #include "rclcpp/rclcpp.hpp"
+#include "vesc_can_ros2_control/driver_core.hpp"
 
 namespace vesc_can_ros2_control
 {
 namespace
 {
-void put(std::array<uint8_t, 8> & data, std::size_t offset, int64_t value, int bytes)
+void write_big_endian(std::array<std::uint8_t, 8> &payload, std::size_t offset, std::int64_t value,
+  std::size_t byte_count)
 {
-  const auto bits = static_cast<uint32_t>(value);
-  for (int i = 0; i < bytes; ++i) {data[offset + i] = (bits >> (8 * (bytes - i - 1))) & 0xFF;}
+  const auto payload_bits = static_cast<std::uint32_t>(value);
+  for (std::size_t byte_index = 0; byte_index < byte_count; ++byte_index) {
+    const auto bit_shift = 8 * (byte_count - byte_index - 1);
+    payload[offset + byte_index] = static_cast<std::uint8_t>(payload_bits >> bit_shift);
+  }
 }
-int32_t read32(const std::array<uint8_t, 8> & d)
+
+std::int32_t read_command_payload(const std::array<std::uint8_t, 8> &payload)
 {
-  const uint32_t value = (uint32_t(d[0]) << 24) | (uint32_t(d[1]) << 16) | (uint32_t(d[2]) << 8) | d[3];
-  return value <= INT32_MAX ? static_cast<int32_t>(value) : -1 - static_cast<int32_t>(UINT32_MAX - value);
+  std::uint32_t payload_bits = 0;
+  for (std::size_t byte_index = 0; byte_index < 4; ++byte_index) {
+    payload_bits = (payload_bits << 8) | payload[byte_index];
+  }
+  return std::bit_cast<std::int32_t>(payload_bits);
 }
-}
-// Protocol fixture only: not a physical motor, encoder, brake or VESC firmware simulation.
+}  // namespace
+
+// Protocol fixture only: it does not model physical motors, brakes or VESC firmware.
 class FakeVescNode : public rclcpp::Node
 {
 public:
   FakeVescNode() : rclcpp::Node("fake_vesc")
   {
-    const auto ids = declare_parameter<std::vector<int64_t>>("controller_ids", {11, 21});
+    const auto controller_ids =
+      declare_parameter<std::vector<std::int64_t>>("controller_ids", {11, 21});
     pole_pairs_ = declare_parameter<double>("pole_pairs", 7.0);
     declare_parameter<bool>("publish_feedback", true);
-    const auto period = declare_parameter<int64_t>("period_ms", 20);
-    watchdog_ = std::chrono::milliseconds(declare_parameter<int64_t>("watchdog_ms", 200));
-    if (!std::isfinite(pole_pairs_) || pole_pairs_ <= 0.0 || period <= 0 || watchdog_.count() <= 0) {
+    const auto feedback_period =
+      std::chrono::milliseconds(declare_parameter<std::int64_t>("period_ms", 20));
+    command_watchdog_timeout_ =
+      std::chrono::milliseconds(declare_parameter<std::int64_t>("watchdog_ms", 200));
+    if (!std::isfinite(pole_pairs_) || pole_pairs_ <= 0.0 || feedback_period.count() <= 0 ||
+        command_watchdog_timeout_.count() <= 0) {
       throw std::invalid_argument("Invalid fake VESC settings");
     }
-    for (auto id : ids) {
-      if (id < 0 || id > 254) {throw std::invalid_argument("Invalid fake controller ID");}
-      for (const auto & m : motors_) {if (m.id == id) {throw std::invalid_argument("Duplicate ID");}}
-      motors_.push_back({static_cast<uint8_t>(id), 0.0, 0.0, 0.0, SteadyClock::now()});
+    for (const auto controller_id : controller_ids) {
+      if (controller_id < 0 || controller_id >= protocol::kBroadcastControllerId) {
+        throw std::invalid_argument("Invalid fake controller ID");
+      }
+      const auto duplicate_motor = std::find_if(motors_.begin(), motors_.end(),
+        [controller_id](const FakeMotor &motor) { return motor.controller_id == controller_id; });
+      if (duplicate_motor != motors_.end()) {
+        throw std::invalid_argument("Duplicate ID");
+      }
+      FakeMotor motor;
+      motor.controller_id = static_cast<std::uint8_t>(controller_id);
+      motor.last_command_time = SteadyClock::now();
+      motors_.push_back(motor);
     }
-    publisher_ = create_publisher<can_msgs::msg::Frame>(declare_parameter<std::string>("can_rx_topic", "/can/rx"), rclcpp::SensorDataQoS());
-    subscription_ = create_subscription<can_msgs::msg::Frame>(declare_parameter<std::string>("can_tx_topic", "/can/tx"), 100,
-      [this](can_msgs::msg::Frame::ConstSharedPtr frame) {
-        if (!frame->is_extended || frame->is_rtr || frame->is_error || frame->dlc != 4 || frame->id > 0x1FFFFFFF) {return;}
-        for (auto & motor : motors_) {
-          if (motor.id != (frame->id & 0xFF)) {continue;}
-          const auto command = frame->id >> 8;
-          const auto value = read32(frame->data);
-          if (command == protocol::SET_RPM_ID) {motor.erpm = value; motor.current = 0.0;}
-          else if (command == protocol::SET_POSITION_ID) {
-            motor.angle = value / 1e6 * PI / 180.0;
-            motor.erpm = 0.0;
-            motor.current = 0.0;
-          } else if (command == protocol::SET_CURRENT_ID) {
-            motor.current = value / 1000.0;
-            motor.erpm = motor.current * 1000.0;
-          } else {return;}
-          motor.command_time = SteadyClock::now();
-        }
-      });
-    last_update_ = SteadyClock::now();
-    timer_ = create_wall_timer(std::chrono::milliseconds(period), [this]() {tick();});
-    RCLCPP_WARN(get_logger(), "Fake VESC active; use isolated CAN topics. No physical dynamics are simulated.");
+    feedback_publisher_ = create_publisher<can_msgs::msg::Frame>(
+      declare_parameter<std::string>("can_rx_topic", "/can/rx"), rclcpp::SensorDataQoS());
+    command_subscription_ = create_subscription<can_msgs::msg::Frame>(
+      declare_parameter<std::string>("can_tx_topic", "/can/tx"), 100,
+      [this](can_msgs::msg::Frame::ConstSharedPtr frame) { handle_can_command(*frame); });
+    last_update_time_ = SteadyClock::now();
+    feedback_timer_ = create_wall_timer(feedback_period, [this]() { update_motors(); });
+    RCLCPP_WARN(get_logger(),
+      "Fake VESC active; use isolated CAN topics. No physical dynamics are simulated.");
   }
+
 private:
-  struct Motor {uint8_t id; double erpm; double angle; double current; TimePoint command_time;};
-  void tick()
+  struct FakeMotor
   {
-    const auto time = SteadyClock::now();
-    const double dt = std::chrono::duration<double>(time - last_update_).count();
-    last_update_ = time;
-    for (auto & m : motors_) {
-      if (time - m.command_time > watchdog_) {m.erpm = 0.0; m.current = 0.0;}
-      m.angle += m.erpm * 2.0 * PI / (60.0 * pole_pairs_) * dt;
-      if (!get_parameter("publish_feedback").as_bool()) {continue;}
-      can_msgs::msg::Frame f;
-      f.header.stamp = now(); f.is_extended = true; f.dlc = 8;
-      f.id = (protocol::STATUS_1_ID << 8) | m.id;
-      put(f.data, 0, std::llround(m.erpm), 4); put(f.data, 4, std::llround(m.current * 10.0), 2);
-      put(f.data, 6, 0, 2); publisher_->publish(f);
-      f.id = (protocol::STATUS_4_ID << 8) | m.id;
-      double angle = std::fmod(m.angle * 180.0 / PI, 360.0); if (angle < 0.0) {angle += 360.0;}
-      put(f.data, 0, 300, 2); put(f.data, 2, 310, 2); put(f.data, 4, 0, 2);
-      put(f.data, 6, std::llround(angle * 50.0), 2); publisher_->publish(f);
-      f.id = (protocol::STATUS_5_ID << 8) | m.id; f.dlc = 6;
-      put(f.data, 0, std::llround(m.angle * 6.0 * pole_pairs_ / (2.0 * PI)), 4);
-      put(f.data, 4, 240, 2); f.data[6] = 0; f.data[7] = 0; publisher_->publish(f);
+    std::uint8_t controller_id{};
+    double erpm{};
+    double position_rad{};
+    double current_a{};
+    TimePoint last_command_time{};
+  };
+
+  void handle_can_command(const can_msgs::msg::Frame &frame)
+  {
+    if (!frame.is_extended || frame.is_rtr || frame.is_error || frame.dlc != 4 ||
+        frame.id > protocol::kExtendedCanIdMask) {
+      return;
+    }
+    const auto controller_id = frame.id & protocol::kControllerIdMask;
+    const auto motor =
+      std::find_if(motors_.begin(), motors_.end(), [controller_id](const FakeMotor &candidate) {
+        return candidate.controller_id == controller_id;
+      });
+    if (motor == motors_.end()) {
+      return;
+    }
+    const auto packet_id = frame.id >> protocol::kPacketIdShift;
+    const auto command_value = read_command_payload(frame.data);
+    switch (packet_id) {
+      case protocol::kSetRpmId:
+        motor->erpm = command_value;
+        motor->current_a = 0.0;
+        break;
+      case protocol::kSetPositionId:
+        motor->position_rad = command_value / 1e6 * kPi / 180.0;
+        motor->erpm = 0.0;
+        motor->current_a = 0.0;
+        break;
+      case protocol::kSetCurrentId:
+        motor->current_a = command_value / 1000.0;
+        motor->erpm = motor->current_a * 1000.0;
+        break;
+      default:
+        return;
+    }
+    motor->last_command_time = SteadyClock::now();
+  }
+
+  can_msgs::msg::Frame make_status_frame(
+    const FakeMotor &motor, std::uint32_t packet_id, std::uint8_t dlc)
+  {
+    can_msgs::msg::Frame frame;
+    frame.header.stamp = now();
+    frame.id = (packet_id << protocol::kPacketIdShift) | motor.controller_id;
+    frame.is_extended = true;
+    frame.dlc = dlc;
+    return frame;
+  }
+
+  void publish_motor_feedback(const FakeMotor &motor)
+  {
+    auto status_1 = make_status_frame(motor, protocol::kStatus1Id, 8);
+    write_big_endian(status_1.data, 0, std::llround(motor.erpm), 4);
+    write_big_endian(status_1.data, 4, std::llround(motor.current_a * 10.0), 2);
+    feedback_publisher_->publish(status_1);
+
+    auto status_2 = make_status_frame(motor, protocol::kStatus2Id, 8);
+    write_big_endian(status_2.data, 0, 12500, 4);  // Fixture: 1.25 Ah drawn.
+    write_big_endian(status_2.data, 4, 5000, 4);   // Fixture: 0.5 Ah regenerated.
+    feedback_publisher_->publish(status_2);
+    auto status_3 = make_status_frame(motor, protocol::kStatus3Id, 8);
+    write_big_endian(status_3.data, 0, 120000, 4);  // Fixture: 12 Wh drawn.
+    write_big_endian(status_3.data, 4, 10000, 4);   // Fixture: 1 Wh regenerated.
+    feedback_publisher_->publish(status_3);
+
+    double position_deg = std::fmod(motor.position_rad * 180.0 / kPi, 360.0);
+    if (position_deg < 0.0) {
+      position_deg += 360.0;
+    }
+    auto status_4 = make_status_frame(motor, protocol::kStatus4Id, 8);
+    write_big_endian(status_4.data, 0, 300, 2);  // FET temperature: 30 C.
+    write_big_endian(status_4.data, 2, 310, 2);  // Motor temperature: 31 C.
+    write_big_endian(status_4.data, 6, std::llround(position_deg * 50.0), 2);
+    feedback_publisher_->publish(status_4);
+
+    auto status_5 = make_status_frame(motor, protocol::kStatus5Id, 8);
+    const auto tachometer_counts =
+      std::llround(motor.position_rad * 6.0 * pole_pairs_ / (2.0 * kPi));
+    write_big_endian(status_5.data, 0, tachometer_counts, 4);
+    write_big_endian(status_5.data, 4, 240, 2);  // Input voltage: 24 V.
+    feedback_publisher_->publish(status_5);
+
+    auto status_6 = make_status_frame(motor, protocol::kStatus6Id, 8);
+    write_big_endian(status_6.data, 0, 1100, 2);  // Fixture: 1.1 V.
+    write_big_endian(status_6.data, 2, 2200, 2);  // Fixture: 2.2 V.
+    write_big_endian(status_6.data, 4, 3300, 2);  // Fixture: 3.3 V.
+    write_big_endian(status_6.data, 6, 500, 2);   // Fixture: normalized PPM 0.5.
+    feedback_publisher_->publish(status_6);
+  }
+
+  void update_motors()
+  {
+    const auto current_time = SteadyClock::now();
+    const double elapsed_seconds =
+      std::chrono::duration<double>(current_time - last_update_time_).count();
+    last_update_time_ = current_time;
+    const bool publish_feedback = get_parameter("publish_feedback").as_bool();
+    for (auto &motor : motors_) {
+      if (current_time - motor.last_command_time > command_watchdog_timeout_) {
+        motor.erpm = 0.0;
+        motor.current_a = 0.0;
+      }
+      motor.position_rad += motor.erpm * 2.0 * kPi / (60.0 * pole_pairs_) * elapsed_seconds;
+      if (publish_feedback) {
+        publish_motor_feedback(motor);
+      }
     }
   }
-  std::vector<Motor> motors_;
+
+  std::vector<FakeMotor> motors_;
   double pole_pairs_{};
-  TimePoint last_update_{};
-  std::chrono::milliseconds watchdog_{};
-  rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr publisher_;
-  rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr subscription_;
-  rclcpp::TimerBase::SharedPtr timer_;
+  TimePoint last_update_time_{};
+  std::chrono::milliseconds command_watchdog_timeout_{};
+  rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr feedback_publisher_;
+  rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr command_subscription_;
+  rclcpp::TimerBase::SharedPtr feedback_timer_;
 };
-}
-int main(int argc, char ** argv)
+}  // namespace vesc_can_ros2_control
+
+int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  int result = 0;
-  try {rclcpp::spin(std::make_shared<vesc_can_ros2_control::FakeVescNode>());}
-  catch (const std::exception & error) {RCLCPP_ERROR(rclcpp::get_logger("fake_vesc"), "%s", error.what()); result = 1;}
+  int exit_code = 0;
+  try {
+    rclcpp::spin(std::make_shared<vesc_can_ros2_control::FakeVescNode>());
+  } catch (const std::exception &error) {
+    RCLCPP_ERROR(rclcpp::get_logger("fake_vesc"), "%s", error.what());
+    exit_code = 1;
+  }
   rclcpp::shutdown();
-  return result;
+  return exit_code;
 }

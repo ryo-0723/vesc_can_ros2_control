@@ -8,12 +8,23 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    share = Path(get_package_share_directory('vesc_can_ros2_control'))
-    return LaunchDescription([
-        DeclareLaunchArgument('use_mock', default_value='false'),
-        DeclareLaunchArgument('config', default_value=str(share / 'config/standalone.yaml')),
-        Node(package='vesc_can_ros2_control', executable='fake_vesc_node',
-             condition=IfCondition(LaunchConfiguration('use_mock'))),
-        Node(package='vesc_can_ros2_control', executable='vesc_node',
-             parameters=[LaunchConfiguration('config')], output='screen'),
-    ])
+    package_share_dir = Path(get_package_share_directory("vesc_can_ros2_control"))
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("use_mock", default_value="false"),
+            DeclareLaunchArgument(
+                "config", default_value=str(package_share_dir / "config/standalone.yaml")
+            ),
+            Node(
+                package="vesc_can_ros2_control",
+                executable="fake_vesc_node",
+                condition=IfCondition(LaunchConfiguration("use_mock")),
+            ),
+            Node(
+                package="vesc_can_ros2_control",
+                executable="vesc_node",
+                parameters=[LaunchConfiguration("config")],
+                output="screen",
+            ),
+        ]
+    )
