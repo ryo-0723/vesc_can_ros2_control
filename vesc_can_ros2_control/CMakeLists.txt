@@ -10,13 +10,13 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
-find_package(vesc_can REQUIRED)
+find_package(vesc_can_driver REQUIRED)
 
 add_library(vesc_hardware SHARED src/vesc_system.cpp)
 target_include_directories(vesc_hardware PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(vesc_hardware PUBLIC vesc_can::transport
+target_link_libraries(vesc_hardware PUBLIC vesc_can_driver::transport
   hardware_interface::hardware_interface pluginlib::pluginlib rclcpp_lifecycle::rclcpp_lifecycle)
 pluginlib_export_plugin_description_file(hardware_interface vesc_plugins.xml)
 
@@ -36,5 +36,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_vesc_hardware HAS_LIBRARY_TARGET)
-ament_export_dependencies(vesc_can hardware_interface pluginlib rclcpp rclcpp_lifecycle)
+ament_export_dependencies(vesc_can_driver hardware_interface pluginlib rclcpp rclcpp_lifecycle)
 ament_package()

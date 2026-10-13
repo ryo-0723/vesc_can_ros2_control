@@ -11,11 +11,11 @@
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/float64.hpp"
 #include "std_srvs/srv/set_bool.hpp"
-#include "vesc_can/can_transport.hpp"
-#include "vesc_can/vesc_state_conversion.hpp"
+#include "vesc_can_driver/can_transport.hpp"
+#include "vesc_can_driver/vesc_state_conversion.hpp"
 #include "vesc_msgs/msg/vesc_state_stamped.hpp"
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 using VescStateStamped = vesc_msgs::msg::VescStateStamped;
 using Float64 = std_msgs::msg::Float64;
@@ -313,14 +313,14 @@ private:
   rclcpp::Publisher<DiagnosticArray>::SharedPtr diagnostic_publisher_;
   rclcpp::TimerBase::SharedPtr state_publish_timer_;
 };
-}  // namespace vesc_can
+}  // namespace vesc_can_driver
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   int exit_code = 0;
   try {
-    auto node = std::make_shared<vesc_can::VescNode>();
+    auto node = std::make_shared<vesc_can_driver::VescNode>();
     rclcpp::spin(node);
     node->stop();
   } catch (const std::exception &error) {

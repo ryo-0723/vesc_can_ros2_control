@@ -1,6 +1,6 @@
 # vesc_can_ros2_control
 
-`vesc_can` の共通ドライバを利用する、複数関節向け ros2_control SystemInterface です。
+`vesc_can_driver` の共通ドライバを利用する、複数関節向け ros2_control SystemInterface です。
 このパッケージには hardware plugin、URDF / controller 設定例、control 用 launch、
 plugin のテストがあります。初期対応は ROS 2 Lyrical / ros2_control 6 です。
 実機では未検証です。
@@ -9,7 +9,7 @@ plugin のテストがあります。初期対応は ROS 2 Lyrical / ros2_contro
 [モータの制御モード](../docs/motor-modes.md) を参照してください。
 
 CAN フレームの encode/decode、送受信、通常ノードと模擬 VESC は
-[vesc_can](../vesc_can/README.md) にあります。
+[vesc_can_driver](../vesc_can_driver/README.md) にあります。
 controller_manager が `vesc_can_ros2_control/VescSystem` をロードし、
 電流は current [A]、速度と電流＋速度は velocity [rad/s]、位置は position [rad] を指定します。
 
@@ -81,8 +81,8 @@ ros2 topic pub -r 20 /steer_controller/commands std_msgs/msg/Float64MultiArray '
 
 ## 通信と停止
 
-plugin は `vesc_can::CanTransport` を利用します。送受信トピック、QoS、必要な STATUS、
-停止フレームと Zenoh pico の条件は [CAN 接続条件](../vesc_can/README.md#can-と-zenoh-pico-の接続条件)
+plugin は `vesc_can_driver::CanTransport` を利用します。送受信トピック、QoS、必要な STATUS、
+停止フレームと Zenoh pico の条件は [CAN 接続条件](../vesc_can_driver/README.md#can-と-zenoh-pico-の接続条件)
 を参照してください。[構成とスレッド](../docs/architecture.md) に read/write と
 通信 executor の境界を記載しています。
 
@@ -90,5 +90,5 @@ plugin は `vesc_can::CanTransport` を利用します。送受信トピック�
 
 このパッケージでは hardware 設定の検査と、実際の controller_manager からの
 plugin 読み込み、駆動・操舵、フィードバック途絶時の全台停止を確認します。
-統合テストは `vesc_can` の通常ノード・模擬 VESC も起動し、標準指令と vesc_msgs の
+統合テストは `vesc_can_driver` の通常ノード・模擬 VESC も起動し、標準指令と vesc_msgs の
 テレメトリを確認します。

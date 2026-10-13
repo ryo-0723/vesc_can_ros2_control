@@ -1,4 +1,4 @@
-#include "vesc_can/vesc_protocol.hpp"
+#include "vesc_can_driver/vesc_protocol.hpp"
 
 #include <bit>
 #include <cmath>
@@ -6,7 +6,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace vesc_can::protocol
+namespace vesc_can_driver::protocol
 {
 namespace
 {
@@ -156,4 +156,4 @@ bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status)
   status.ppm = read_signed_16(frame, 6) / 1000.0;
   return true;
 }
-}  // namespace vesc_can::protocol
+}  // namespace vesc_can_driver::protocol

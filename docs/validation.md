@@ -1,7 +1,7 @@
 # 公開準備の検証記録 — 2026-10-13
 
 既存の CAN ドライバ / ros2_control 分割を保持し、模擬 VESC のソースを
-`vesc_can/test/support` へ移動しました。現在の `src` の各ファイルはすべて
+`vesc_can_driver/test/support` へ移動しました。現在の `src` の各ファイルはすべて
 CMake のビルド対象です。[ソースの役割](source-layout.md) と
 [モータの制御モード](motor-modes.md) を追加しました。
 ドライバ 2 パッケージの maintainer、repository URL、bugtracker URL も設定しました。
@@ -20,14 +20,14 @@ CMake のビルド対象です。[ソースの役割](source-layout.md) と
 |---|---|
 | 全 C++ ファイルの clang-format チェック（test/support を含む） | 成功 |
 | launch と統合テストの Black チェック（100文字） | 成功 |
-| `vesc_msgs` と `vesc_can` のビルド（control パッケージを除外） | 成功 |
+| `vesc_msgs` と `vesc_can_driver` のビルド（control パッケージを除外） | 成功 |
 | `vesc_can_ros2_control` までのビルド | 成功 |
 | protocol / core の単体テスト | 11 ケース成功 |
 | transport の単体テスト | 1 ケース成功 |
 | state_conversion の単体テスト | 3 ケース成功 |
 | hardware 設定の単体テスト | 4 ケース成功 |
 | 通常ノード・controller_manager の統合テストと終了コード | 3 ケース成功 |
-| インストール済み `vesc_can::protocol` を外部 CMake プロジェクトから利用 | ビルド・実行成功 |
+| インストール済み `vesc_can_driver::protocol` を外部 CMake プロジェクトから利用 | ビルド・実行成功 |
 | `BUILD_TESTING=OFF` での CAN ドライバビルド | 成功、模擬ノードの実行ファイルもインストール済み |
 | package.xml の XML 構文、追加文書のローカルリンク、git diff --check | 成功 |
 
@@ -40,8 +40,8 @@ CMake のビルド対象です。[ソースの役割](source-layout.md) と
 位置範囲・必須タコメータ・全台停止、未対応または複数の指令インターフェースの拒否、
 必須モータ設定と状態インターフェースの検査、不正な数値設定の拒否を確認します。
 
-外部 CMake プロジェクトは `find_package(vesc_can REQUIRED)` と
-`target_link_libraries(... PRIVATE vesc_can::protocol)` を使用しました。
+外部 CMake プロジェクトは `find_package(vesc_can_driver REQUIRED)` と
+`target_link_libraries(... PRIVATE vesc_can_driver::protocol)` を使用しました。
 `SET_RPM` のフレーム ID とペイロードを実行時に確認し、`ldd` では
 `rclcpp` と `hardware_interface` への動的リンクがないことも確認しました。
 
@@ -68,7 +68,7 @@ source /opt/ros/lyrical/setup.bash
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp ROS_DOMAIN_ID=193
 colcon build --packages-up-to vesc_can_ros2_control --cmake-args -DBUILD_TESTING=ON
 source install/setup.bash
-colcon test --packages-select vesc_can vesc_can_ros2_control \
+colcon test --packages-select vesc_can_driver vesc_can_ros2_control \
   --executor sequential --return-code-on-test-failure --event-handlers console_direct+
 colcon test-result --verbose
 ```
@@ -154,7 +154,7 @@ Lyrical で再ビルドし、4 モードの統合テストも含む **35 ケー�
 ## 状態メッセージ変換の名前変更後の検証
 
 `vesc_telemetry.hpp/.cpp` を `vesc_state_conversion.hpp/.cpp` に、公開 CMake target を
-`vesc_can::state_conversion` に変更しました。変換テストも `test_state_conversion` に
+`vesc_can_driver::state_conversion` に変更しました。変換テストも `test_state_conversion` に
 揃え、変換処理の内容は維持しています。
 
 Lyrical で全 3 パッケージを再ビルドし、既存の **35 ケースが成功**しました。
@@ -174,3 +174,21 @@ ROS パラメータ、トピック、interface、メッセージ項目名は維�
 **35 ケースが成功**しました。`colcon test-result` は
 `40 tests, 0 errors, 0 failures, 0 skipped` です。
 変更した C++ ファイルの clang-format と `git diff --check` も成功しました。
+
+## CAN ドライバのパッケージ名変更後の検証
+
+CAN パッケージとディレクトリを `vesc_can_driver` に揃えました。
+ヘッダの include パス、C++ namespace、公開 CMake target、依存パッケージ、
+launch とテスト、CI のパスとコマンドも更新しています。
+
+Lyrical でドライバ単体をビルドした後、ros2_control plugin までビルドしました。
+既存の **35 ケースが成功**し、`colcon test-result` は
+`40 tests, 0 errors, 0 failures, 0 skipped` でした。
+外部 CMake プロジェクトから `find_package(vesc_can_driver REQUIRED)` を使用し、
+公開 target の protocol / core / transport / state_conversion をリンクした
+C++ コードのビルド・実行も成功しました。
+
+`ros2 pkg prefix vesc_can_driver` と `ros2 pkg executables vesc_can_driver` で
+インストールされたパッケージと通常・模擬ノードを確認し、
+`ros2 launch vesc_can_driver vesc_standalone.launch.py --show-args` で launch の解決も確認しました。
+Python 構文、C++ の clang-format、`git diff --check` は成功しています。

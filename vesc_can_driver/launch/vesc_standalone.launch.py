@@ -8,7 +8,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    package_share_dir = Path(get_package_share_directory("vesc_can"))
+    package_share_dir = Path(get_package_share_directory("vesc_can_driver"))
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_mock", default_value="false"),
@@ -16,12 +16,12 @@ def generate_launch_description():
                 "config", default_value=str(package_share_dir / "config/standalone.yaml")
             ),
             Node(
-                package="vesc_can",
+                package="vesc_can_driver",
                 executable="fake_vesc_node",
                 condition=IfCondition(LaunchConfiguration("use_mock")),
             ),
             Node(
-                package="vesc_can",
+                package="vesc_can_driver",
                 executable="vesc_node",
                 parameters=[LaunchConfiguration("config")],
                 output="screen",

@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>vesc_can_ros2_control</name>
-  <version>0.1.0</version>
-  <description>Multi-joint ros2_control hardware plugin using the vesc_can driver.</description>
+  <version>0.1.1</version>
+  <description>Multi-joint ros2_control hardware plugin using the vesc_can_driver driver.</description>
   <maintainer email="tengbenliang742@gmail.com">ryo-0723</maintainer>
   <license>MIT</license>
   <url type="repository">https://github.com/ryo-0723/vesc_can_ros2_control</url>
   <url type="bugtracker">https://github.com/ryo-0723/vesc_can_ros2_control/issues</url>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <depend>vesc_can</depend>
+  <depend>vesc_can_driver</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>

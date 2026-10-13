@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "hardware_interface/system_interface.hpp"
-#include "vesc_can/can_transport.hpp"
+#include "vesc_can_driver/can_transport.hpp"
 
 namespace vesc_can_ros2_control
 {
@@ -43,19 +43,21 @@ private:
     hardware_interface::StateInterface::SharedPtr handle;
   };
   static StateField state_field_from_name(const std::string &interface_name);
-  static vesc_can::MotorConfig load_joint_config(const hardware_interface::ComponentInfo &joint);
+  static vesc_can_driver::MotorConfig load_joint_config(
+    const hardware_interface::ComponentInfo &joint);
   void cache_interface_handles();
   void release_can_transport();
-  double read_state_value(const StateHandle &state_handle, vesc_can::TimePoint current_time) const;
+  double read_state_value(
+    const StateHandle &state_handle, vesc_can_driver::TimePoint current_time) const;
 
-  std::vector<vesc_can::MotorConfig> motor_configs_;
-  std::vector<vesc_can::MotorState> motor_states_;
+  std::vector<vesc_can_driver::MotorConfig> motor_configs_;
+  std::vector<vesc_can_driver::MotorState> motor_states_;
   std::vector<double> motor_commands_;
   std::vector<hardware_interface::CommandInterface::SharedPtr> command_handles_;
   std::vector<StateHandle> state_handles_;
-  vesc_can::TransportOptions transport_options_;
+  vesc_can_driver::TransportOptions transport_options_;
   std::chrono::milliseconds activation_timeout_{2000};
-  std::unique_ptr<vesc_can::CanTransport> can_transport_;
+  std::unique_ptr<vesc_can_driver::CanTransport> can_transport_;
   bool active_{false};
 };
 }  // namespace vesc_can_ros2_control

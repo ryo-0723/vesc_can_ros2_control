@@ -1,6 +1,6 @@
-#include "vesc_can/vesc_state_conversion.hpp"
+#include "vesc_can_driver/vesc_state_conversion.hpp"
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 vesc_msgs::msg::VescState make_vesc_state(
   const MotorConfig &motor_config, const MotorState &motor_state, TimePoint current_time)
@@ -44,4 +44,4 @@ vesc_msgs::msg::VescState make_vesc_state(
   message.fault_code = kUnavailableVescInteger;
   return message;
 }
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

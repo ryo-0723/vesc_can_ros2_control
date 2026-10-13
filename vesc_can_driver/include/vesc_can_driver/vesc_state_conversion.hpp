@@ -1,9 +1,9 @@
 #pragma once
 
-#include "vesc_can/driver_core.hpp"
+#include "vesc_can_driver/driver_core.hpp"
 #include "vesc_msgs/msg/vesc_state.hpp"
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 // Native STATUS frames do not include VESC fault codes or absolute tachometer counts.
 constexpr std::int32_t kUnavailableVescInteger = -1;
@@ -13,4 +13,4 @@ constexpr std::int32_t kUnavailableVescInteger = -1;
 // count; consumers must check status_5_fresh in the accompanying diagnostics.
 vesc_msgs::msg::VescState make_vesc_state(
   const MotorConfig &motor_config, const MotorState &motor_state, TimePoint current_time);
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

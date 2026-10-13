@@ -110,12 +110,12 @@ VESC のハードウェア世代ではなく、firmware のネイティブ CAN �
 
 ## 旧独自 API からの移行
 
-パッケージ分割後の通常ノードと模擬 VESC は `vesc_can` にあります。
-起動は `ros2 launch vesc_can vesc_standalone.launch.py`、設定ファイルは
-`vesc_can/config/standalone.yaml` を使用します。既存のトピック設定を保つため、
+パッケージ分割後の通常ノードと模擬 VESC は `vesc_can_driver` にあります。
+起動は `ros2 launch vesc_can_driver vesc_standalone.launch.py`、設定ファイルは
+`vesc_can_driver/config/standalone.yaml` を使用します。既存のトピック設定を保つため、
 通常ノードの既定名は `vesc_can_ros2_control` のままです。
 hardware plugin 名は `vesc_can_ros2_control/VescSystem` を指定します。
-C++ の共通ヘッダは `vesc_can/...`、namespace は `vesc_can` へ移動しています。
+C++ の共通ヘッダは `vesc_can_driver/...`、namespace は `vesc_can_driver` へ移動しています。
 
 開発段階の独自 `vesc_can_interfaces` パッケージと SetPosition.srv は削除しました。
 旧型の publisher/subscriber は次の型・トピック・単位へ変更してください。

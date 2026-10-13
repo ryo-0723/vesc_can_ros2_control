@@ -147,7 +147,7 @@ hybrid_joint:
 ```
 
 上記は `ros__parameters` 内の抜粋です。完全な設定は
-[four_modes.yaml](../vesc_can/config/four_modes.yaml) を参照してください。
+[four_modes.yaml](../vesc_can_driver/config/four_modes.yaml) を参照してください。
 `JointState` 指令は `name` で関節を指定し、速度関節は `velocity` 配列、
 位置関節は `position` 配列を読みます。送る配列の長さは `name` と一致させます。
 電流モードは各モータの `Float64` を使います。`JointState.effort` は [Nm] なので
@@ -177,11 +177,11 @@ ros2 topic pub -r 20 /hybrid_controller/commands std_msgs/msg/Float64MultiArray 
 この構成では模擬ノードを手動で起動し、通常ノード用 launch の use_mock は省略します。
 
 ```bash
-ros2 run vesc_can fake_vesc_node --ros-args \
+ros2 run vesc_can_driver fake_vesc_node --ros-args \
   -p controller_ids:='[11, 21, 12, 31]' \
   -p can_tx_topic:=/bench/can/tx -p can_rx_topic:=/bench/can/rx
-ros2 launch vesc_can vesc_standalone.launch.py \
-  config:="$(ros2 pkg prefix --share vesc_can)/config/four_modes.yaml"
+ros2 launch vesc_can_driver vesc_standalone.launch.py \
+  config:="$(ros2 pkg prefix --share vesc_can_driver)/config/four_modes.yaml"
 ```
 
 通常ノードでは次の指令ストリームを別々の端末で起動し、フィードバックが届いてから

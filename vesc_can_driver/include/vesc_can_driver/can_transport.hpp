@@ -10,9 +10,9 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
-#include "vesc_can/driver_core.hpp"
+#include "vesc_can_driver/driver_core.hpp"
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 struct TransportOptions
 {
@@ -80,4 +80,4 @@ private:
   std::atomic<bool> faulted_{false};
   std::atomic<bool> fault_requested_{false};
 };
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

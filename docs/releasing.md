@@ -8,8 +8,8 @@ C++ の特殊な機能を増やすことも公開条件ではありません。
 repository / bugtracker URL は設定済みです。権利・メタデータの最終確認、実機検証、
 リリース手続きは残っています。GitHub の public 化だけでは ROS apt に入りません。
 
-このリポジトリは `vesc_can`、`vesc_can_ros2_control`、`vesc_msgs` の 3 パッケージです。
-CAN の encode/decode・通常ノードは `vesc_can`、hardware plugin は
+このリポジトリは `vesc_can_driver`、`vesc_can_ros2_control`、`vesc_msgs` の 3 パッケージです。
+CAN の encode/decode・通常ノードは `vesc_can_driver`、hardware plugin は
 `vesc_can_ros2_control` が担当します。後者だけが ros2_control に依存します。
 各パッケージの依存を package.xml へ記載し、リリース時もこの依存順で解決します。
 

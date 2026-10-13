@@ -1,10 +1,10 @@
-#include "vesc_can/can_transport.hpp"
+#include "vesc_can_driver/can_transport.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 CanTransport::CanTransport(std::vector<MotorConfig> motor_configs,
   TransportOptions transport_options, rclcpp::Node::SharedPtr can_node)
@@ -214,4 +214,4 @@ void CanTransport::send_commands()
     can_tx_publisher_->publish(frame);
   }
 }
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

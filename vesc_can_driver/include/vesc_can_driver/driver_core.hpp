@@ -10,9 +10,9 @@
 #include <string_view>
 #include <vector>
 
-#include "vesc_can/vesc_protocol.hpp"
+#include "vesc_can_driver/vesc_protocol.hpp"
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 using SteadyClock = std::chrono::steady_clock;
 using TimePoint = SteadyClock::time_point;
@@ -161,4 +161,4 @@ private:
   TimePoint enabled_at_{};
   std::string fault_reason_;
 };
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

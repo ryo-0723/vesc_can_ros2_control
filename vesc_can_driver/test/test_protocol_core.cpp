@@ -6,8 +6,8 @@
 #include <utility>
 
 #include "gtest/gtest.h"
-#include "vesc_can/driver_core.hpp"
-namespace vesc_can
+#include "vesc_can_driver/driver_core.hpp"
+namespace vesc_can_driver
 {
 namespace
 {
@@ -701,4 +701,4 @@ TEST(Core, ModeSpecificCurrentAndStartupLimitsAreValidated)
 }
 
 }  // namespace
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

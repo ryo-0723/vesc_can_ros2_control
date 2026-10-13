@@ -4,7 +4,7 @@
 
 #include "can_msgs/msg/frame.hpp"
 
-namespace vesc_can::protocol
+namespace vesc_can_driver::protocol
 {
 constexpr std::uint8_t kBroadcastControllerId = 255;
 constexpr std::uint32_t kControllerIdMask = 0xFF;
@@ -75,4 +75,4 @@ bool decode_status_3(const can_msgs::msg::Frame &frame, Status3 &status);
 bool decode_status_4(const can_msgs::msg::Frame &frame, Status4 &status);
 bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status);
 bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status);
-}  // namespace vesc_can::protocol
+}  // namespace vesc_can_driver::protocol

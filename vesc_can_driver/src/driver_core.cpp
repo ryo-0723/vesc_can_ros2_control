@@ -1,4 +1,4 @@
-#include "vesc_can/driver_core.hpp"
+#include "vesc_can_driver/driver_core.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 ControlMode control_mode_from_string(std::string_view control_mode_name)
 {
@@ -470,4 +470,4 @@ can_msgs::msg::Frame DriverCore::make_velocity_command(
     std::llround(joint_velocity_to_erpm(motor_config, motor_command.ramped_joint_velocity_rad_s)));
   return protocol::make_set_rpm_frame(motor_config.controller_id, electrical_rpm);
 }
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

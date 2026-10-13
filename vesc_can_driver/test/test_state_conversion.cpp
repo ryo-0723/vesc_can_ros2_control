@@ -2,9 +2,9 @@
 #include <cmath>
 
 #include "gtest/gtest.h"
-#include "vesc_can/vesc_state_conversion.hpp"
+#include "vesc_can_driver/vesc_state_conversion.hpp"
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 namespace
 {
@@ -110,4 +110,4 @@ TEST(StateConversion, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForCo
   EXPECT_EQ(message.displacement, -42);  // Last count; status_5_fresh becomes false.
 }
 }  // namespace
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

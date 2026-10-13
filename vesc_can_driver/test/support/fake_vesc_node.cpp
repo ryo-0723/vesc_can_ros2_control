@@ -11,9 +11,9 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
-#include "vesc_can/driver_core.hpp"
+#include "vesc_can_driver/driver_core.hpp"
 
-namespace vesc_can
+namespace vesc_can_driver
 {
 namespace
 {
@@ -206,14 +206,14 @@ private:
   rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr command_subscription_;
   rclcpp::TimerBase::SharedPtr feedback_timer_;
 };
-}  // namespace vesc_can
+}  // namespace vesc_can_driver
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   int exit_code = 0;
   try {
-    rclcpp::spin(std::make_shared<vesc_can::FakeVescNode>());
+    rclcpp::spin(std::make_shared<vesc_can_driver::FakeVescNode>());
   } catch (const std::exception &error) {
     RCLCPP_ERROR(rclcpp::get_logger("fake_vesc"), "%s", error.what());
     exit_code = 1;

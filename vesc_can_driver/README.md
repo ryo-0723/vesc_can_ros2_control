@@ -1,4 +1,4 @@
-# vesc_can
+# vesc_can_driver
 
 VESC のネイティブ CAN フレームを encode/decode するライブラリと、共通ドライバ、
 通常ノード、模擬 VESC を提供します。`ros2_control` には依存しません。
@@ -12,40 +12,40 @@ VESC のネイティブ CAN フレームを encode/decode するライブラリ�
 
 | CMake target | ヘッダ | 役割 |
 |---|---|---|
-| vesc_can::protocol | vesc_can/vesc_protocol.hpp | SET_RPM / SET_CURRENT / SET_POS の encode、STATUS1〜6 の decode |
-| vesc_can::core | vesc_can/driver_core.hpp | 関節単位への変換、複数台の状態、範囲・鮮度・停止の管理 |
-| vesc_can::transport | vesc_can/can_transport.hpp | CAN トピックの送受信、専用 executor と指令 mailbox |
-| vesc_can::state_conversion | vesc_can/vesc_state_conversion.hpp | 受信した状態を vesc_msgs に変換 |
+| vesc_can_driver::protocol | vesc_can_driver/vesc_protocol.hpp | SET_RPM / SET_CURRENT / SET_POS の encode、STATUS1〜6 の decode |
+| vesc_can_driver::core | vesc_can_driver/driver_core.hpp | 関節単位への変換、複数台の状態、範囲・鮮度・停止の管理 |
+| vesc_can_driver::transport | vesc_can_driver/can_transport.hpp | CAN トピックの送受信、専用 executor と指令 mailbox |
+| vesc_can_driver::state_conversion | vesc_can_driver/vesc_state_conversion.hpp | 受信した状態を vesc_msgs に変換 |
 
 encode/decode だけを使う場合は protocol target にリンクします。このライブラリは
 ROS ノードや executor を起動せず、rclcpp や hardware_interface にリンクしません。
 
 ```cmake
-find_package(vesc_can REQUIRED)
-target_link_libraries(my_can_node PRIVATE vesc_can::protocol)
+find_package(vesc_can_driver REQUIRED)
+target_link_libraries(my_can_node PRIVATE vesc_can_driver::protocol)
 ```
 
-利用側の package.xml には `<depend>vesc_can</depend>` を記載します。
+利用側の package.xml には `<depend>vesc_can_driver</depend>` を記載します。
 
 ```cpp
-#include "vesc_can/vesc_protocol.hpp"
+#include "vesc_can_driver/vesc_protocol.hpp"
 
-auto command = vesc_can::protocol::make_set_rpm_frame(11, 420);  // ERPM
-vesc_can::protocol::Status1 status;
-if (vesc_can::protocol::decode_status_1(received_frame, status)) {
+auto command = vesc_can_driver::protocol::make_set_rpm_frame(11, 420);  // ERPM
+vesc_can_driver::protocol::Status1 status;
+if (vesc_can_driver::protocol::decode_status_1(received_frame, status)) {
   // status.controller_id, status.electrical_rpm, status.motor_current_a, status.duty_cycle
 }
 ```
 
 不正な ID・フラグ・DLC の受信フレームは decode が false を返します。
 指令の broadcast ID や表現範囲外の値は例外になります。
-ライブラリと型の C++ namespace は `vesc_can`、パケット関数は `vesc_can::protocol` です。
+ライブラリと型の C++ namespace は `vesc_can_driver`、パケット関数は `vesc_can_driver::protocol` です。
 フレーム送信と制御周期は呼び出し側が管理します。
 
 ## 通常ノード
 
 ```bash
-ros2 launch vesc_can vesc_standalone.launch.py use_mock:=true
+ros2 launch vesc_can_driver vesc_standalone.launch.py use_mock:=true
 # 別端末：フィードバックを受信した後に有効化
 ros2 service call /vesc_can_ros2_control/enable std_srvs/srv/SetBool '{data: true}'
 ros2 topic pub -r 20 /vesc_can_ros2_control/joint_commands sensor_msgs/msg/JointState \

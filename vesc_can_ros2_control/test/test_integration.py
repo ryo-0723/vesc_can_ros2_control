@@ -24,7 +24,7 @@ from vesc_msgs.msg import VescStateStamped
 @pytest.mark.launch_test
 def generate_test_description():
     package_share_dir = Path(get_package_share_directory("vesc_can_ros2_control"))
-    can_package_share_dir = Path(get_package_share_directory("vesc_can"))
+    can_package_share_dir = Path(get_package_share_directory("vesc_can_driver"))
     return LaunchDescription(
         [
             IncludeLaunchDescription(
@@ -43,7 +43,7 @@ def generate_test_description():
                 }.items(),
             ),
             Node(
-                package="vesc_can",
+                package="vesc_can_driver",
                 executable="fake_vesc_node",
                 name="fake_topic_vesc",
                 parameters=[
@@ -51,7 +51,7 @@ def generate_test_description():
                 ],
             ),
             Node(
-                package="vesc_can",
+                package="vesc_can_driver",
                 executable="vesc_node",
                 namespace="topic_test",
                 parameters=[
@@ -63,7 +63,7 @@ def generate_test_description():
                 ],
             ),
             Node(
-                package="vesc_can",
+                package="vesc_can_driver",
                 executable="fake_vesc_node",
                 name="fake_four_vesc",
                 parameters=[
@@ -75,7 +75,7 @@ def generate_test_description():
                 ],
             ),
             Node(
-                package="vesc_can",
+                package="vesc_can_driver",
                 executable="vesc_node",
                 namespace="four_topic",
                 parameters=[

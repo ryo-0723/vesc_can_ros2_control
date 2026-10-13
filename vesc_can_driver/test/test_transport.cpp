@@ -3,8 +3,8 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "vesc_can/can_transport.hpp"
-namespace vesc_can
+#include "vesc_can_driver/can_transport.hpp"
+namespace vesc_can_driver
 {
 namespace
 {
@@ -129,4 +129,4 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
 }
 
 }  // namespace
-}  // namespace vesc_can
+}  // namespace vesc_can_driver

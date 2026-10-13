@@ -20,7 +20,7 @@ Motor modes: `current` (motor A signed in the joint direction), `velocity` (join
 `position` (joint rad), and `current_velocity` (current startup followed by velocity control).
 Both standalone and ros2_control use the same driver functions for all four modes.
 
-- [CAN protocol, standalone node and bridge configuration (日本語)](vesc_can/README.md)
+- [CAN protocol, standalone node and bridge configuration (日本語)](vesc_can_driver/README.md)
 - [ros2_control plugin and controller examples (日本語)](vesc_can_ros2_control/README.md)
 - [Architecture and concurrency](docs/architecture.md)
 - [Source layout and file responsibilities (日本語)](docs/source-layout.md)
@@ -41,7 +41,7 @@ rosdep install --from-paths src/vesc_can_ros2_control \
   --ignore-src -r -y --rosdistro lyrical
 colcon build --packages-up-to vesc_can_ros2_control --cmake-args -DBUILD_TESTING=ON
 source install/setup.bash
-colcon test --packages-select vesc_can vesc_can_ros2_control
+colcon test --packages-select vesc_can_driver vesc_can_ros2_control
 colcon test-result --verbose
 ```
 
@@ -49,23 +49,23 @@ The repository contains three ROS packages:
 
 | Package | Purpose |
 |---|---|
-| `vesc_can` | Native CAN encode/decode, common driver and transport, standalone node and fake VESC |
-| `vesc_can_ros2_control` | Multi-joint hardware plugin, control launch and URDF/controller examples; depends on `vesc_can` |
+| `vesc_can_driver` | Native CAN encode/decode, common driver and transport, standalone node and fake VESC |
+| `vesc_can_ros2_control` | Multi-joint hardware plugin, control launch and URDF/controller examples; depends on `vesc_can_driver` |
 | `vesc_msgs` | State-only subset: two message definitions copied from a pinned f1tenth ROS 2 revision |
 
 To use the CAN codec or standalone node without ros2_control, build only its
 dependency chain:
 
 ```bash
-rosdep install --from-paths src/vesc_can_ros2_control/vesc_can \
+rosdep install --from-paths src/vesc_can_ros2_control/vesc_can_driver \
   src/vesc_can_ros2_control/vesc_msgs --ignore-src -r -y --rosdistro lyrical
-colcon build --packages-up-to vesc_can --cmake-args -DBUILD_TESTING=ON
+colcon build --packages-up-to vesc_can_driver --cmake-args -DBUILD_TESTING=ON
 source install/setup.bash
-colcon test --packages-select vesc_can
+colcon test --packages-select vesc_can_driver
 ```
 
-The reusable codec target is `vesc_can::protocol`; see its
-[C++ usage example](vesc_can/README.md#ライブラリとして使う).
+The reusable codec target is `vesc_can_driver::protocol`; see its
+[C++ usage example](vesc_can_driver/README.md#ライブラリとして使う).
 No extra VESC repository checkout is needed.
 Do not add a second source copy of `vesc_msgs` to the same workspace. Existing
 workspaces using the previous `dependencies.repos` should move the old
@@ -81,9 +81,9 @@ line limit. CI checks both before building:
 ```bash
 clang-format -i vesc_can_ros2_control/include/vesc_can_ros2_control/*.hpp \
   vesc_can_ros2_control/src/*.cpp vesc_can_ros2_control/test/*.cpp
-clang-format -i vesc_can/include/vesc_can/*.hpp vesc_can/src/*.cpp \
-  vesc_can/test/*.cpp vesc_can/test/support/*.cpp
-black --line-length 100 vesc_can/launch vesc_can_ros2_control/launch \
+clang-format -i vesc_can_driver/include/vesc_can_driver/*.hpp vesc_can_driver/src/*.cpp \
+  vesc_can_driver/test/*.cpp vesc_can_driver/test/support/*.cpp
+black --line-length 100 vesc_can_driver/launch vesc_can_ros2_control/launch \
   vesc_can_ros2_control/test/test_integration.py
 ```
 
@@ -93,8 +93,10 @@ The standalone API now uses upstream and standard messages; see the
 and `ControlMode::CurrentVelocity`, `kPi`, `kUnknownValue`, the protocol's `k*Id` constants,
 and `DriverCore::motor_configs()`. `MotorConfig::logical_id` is removed, and
 `CanTransport::set_command()` takes a motor index.
-Shared C++ headers now use `vesc_can/...` and namespace `vesc_can`.
-The standalone launch command is now `ros2 launch vesc_can vesc_standalone.launch.py`.
+Shared C++ headers now use `vesc_can_driver/...` and namespace `vesc_can_driver`.
+The CAN package name and CMake target prefix are also `vesc_can_driver`
+(for example, `vesc_can_driver::protocol`).
+The standalone launch command is now `ros2 launch vesc_can_driver vesc_standalone.launch.py`.
 
 ## Bench demo without a motor
 

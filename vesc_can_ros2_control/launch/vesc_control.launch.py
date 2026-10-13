@@ -27,7 +27,7 @@ def create_control_nodes(context):
     ]
     return [
         Node(
-            package="vesc_can",
+            package="vesc_can_driver",
             executable="fake_vesc_node",
             name="fake_control_vesc",
             parameters=[can_topic_parameters],

@@ -4,13 +4,13 @@
 
 | パッケージ | 内容 | 他のパッケージとの関係 |
 |---|---|---|
-| vesc_can | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC | vesc_msgs を使用。ros2_control への依存なし |
-| vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can の transport ライブラリを使用 |
+| vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC | vesc_msgs を使用。ros2_control への依存なし |
+| vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の transport ライブラリを使用 |
 | vesc_msgs | 上流由来の ROS メッセージ | 両ドライバとは独立したインターフェース定義 |
 
-`vesc_can::protocol` は encode/decode だけの公開 CMake target です。
-共通の状態管理は `vesc_can::core`、CAN トピック処理は `vesc_can::transport`、
-vesc_msgs への変換は `vesc_can::state_conversion` に分けてリンクできます。
+`vesc_can_driver::protocol` は encode/decode だけの公開 CMake target です。
+共通の状態管理は `vesc_can_driver::core`、CAN トピック処理は `vesc_can_driver::transport`、
+vesc_msgs への変換は `vesc_can_driver::state_conversion` に分けてリンクできます。
 protocol/core は ROS ノードを起動しません。
 パッケージを分割しても、ライブラリ間の呼び出しにトピック中継や追加スレッドは
 発生しません。実行時の CAN executor と mailbox の構成は以下のとおりです。

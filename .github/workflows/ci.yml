@@ -28,22 +28,22 @@ jobs:
       - name: Check formatting
         run: |
           clang-format --dry-run --Werror \
-            ws/src/vesc_can_ros2_control/vesc_can/include/vesc_can/*.hpp \
-            ws/src/vesc_can_ros2_control/vesc_can/src/*.cpp \
-            ws/src/vesc_can_ros2_control/vesc_can/test/*.cpp \
-            ws/src/vesc_can_ros2_control/vesc_can/test/support/*.cpp \
+            ws/src/vesc_can_ros2_control/vesc_can_driver/include/vesc_can_driver/*.hpp \
+            ws/src/vesc_can_ros2_control/vesc_can_driver/src/*.cpp \
+            ws/src/vesc_can_ros2_control/vesc_can_driver/test/*.cpp \
+            ws/src/vesc_can_ros2_control/vesc_can_driver/test/support/*.cpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/include/vesc_can_ros2_control/*.hpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/src/*.cpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test/*.cpp
           black --check --line-length 100 \
-            ws/src/vesc_can_ros2_control/vesc_can/launch \
+            ws/src/vesc_can_ros2_control/vesc_can_driver/launch \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/launch \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test/test_integration.py
       - name: Build CAN driver independently
         working-directory: ws
         run: |
           source /opt/ros/lyrical/setup.bash
-          colcon build --packages-up-to vesc_can --packages-ignore vesc_can_ros2_control --cmake-args -DBUILD_TESTING=ON
+          colcon build --packages-up-to vesc_can_driver --packages-ignore vesc_can_ros2_control --cmake-args -DBUILD_TESTING=ON
       - name: Build ros2_control plugin
         working-directory: ws
         run: |
@@ -54,5 +54,5 @@ jobs:
         run: |
           source /opt/ros/lyrical/setup.bash
           source install/setup.bash
-          colcon test --packages-select vesc_can vesc_can_ros2_control --event-handlers console_direct+
+          colcon test --packages-select vesc_can_driver vesc_can_ros2_control --event-handlers console_direct+
           colcon test-result --verbose

@@ -77,16 +77,17 @@ VescSystem::StateField VescSystem::state_field_from_name(const std::string &inte
   throw std::invalid_argument("Unsupported state interface: " + interface_name);
 }
 
-vesc_can::MotorConfig VescSystem::load_joint_config(const hardware_interface::ComponentInfo &joint)
+vesc_can_driver::MotorConfig VescSystem::load_joint_config(
+  const hardware_interface::ComponentInfo &joint)
 {
   if (joint.command_interfaces.size() != 1) {
     throw std::invalid_argument(joint.name + ": exactly one command interface is required");
   }
-  vesc_can::MotorConfig motor_config;
+  vesc_can_driver::MotorConfig motor_config;
   motor_config.name = joint.name;
   const auto &command_interface = joint.command_interfaces.front().name;
   const auto &parameters = joint.parameters;
-  motor_config.control_mode = vesc_can::resolve_control_mode(
+  motor_config.control_mode = vesc_can_driver::resolve_control_mode(
     get_string_parameter(parameters, "control_mode", ""), command_interface);
   if (parameters.count("controller_id") == 0 || parameters.count("pole_pairs") == 0) {
     throw std::invalid_argument(joint.name + ": controller_id and pole_pairs are required");
@@ -110,9 +111,9 @@ vesc_can::MotorConfig VescSystem::load_joint_config(const hardware_interface::Co
   motor_config.startup_timeout =
     std::chrono::milliseconds(get_integer_parameter(parameters, "startup_timeout_ms", 1000));
   motor_config.min_joint_position_rad =
-    get_numeric_parameter(parameters, "min_position", -vesc_can::kPi);
+    get_numeric_parameter(parameters, "min_position", -vesc_can_driver::kPi);
   motor_config.max_joint_position_rad =
-    get_numeric_parameter(parameters, "max_position", vesc_can::kPi);
+    get_numeric_parameter(parameters, "max_position", vesc_can_driver::kPi);
   motor_config.feedback_timeout =
     std::chrono::milliseconds(get_integer_parameter(parameters, "feedback_timeout_ms", 500));
   motor_config.command_timeout =
@@ -123,7 +124,7 @@ vesc_can::MotorConfig VescSystem::load_joint_config(const hardware_interface::Co
     const auto state_field = state_field_from_name(state_interface.name);
     has_matching_state_interface =
       has_matching_state_interface || state_interface.name == command_interface;
-    if (motor_config.control_mode != vesc_can::ControlMode::Position &&
+    if (motor_config.control_mode != vesc_can_driver::ControlMode::Position &&
         state_field == StateField::Position) {
       motor_config.require_tachometer = true;
     }
@@ -159,7 +160,7 @@ hardware_interface::CallbackReturn VescSystem::on_init(
     for (const auto &joint : hardware_info.joints) {
       motor_configs_.push_back(load_joint_config(joint));
     }
-    vesc_can::validate_configs(motor_configs_);
+    vesc_can_driver::validate_configs(motor_configs_);
     motor_states_.resize(motor_configs_.size());
     motor_commands_.resize(motor_configs_.size());
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -188,7 +189,7 @@ void VescSystem::cache_interface_handles()
 hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecycle::State &)
 {
   try {
-    std::fill(motor_states_.begin(), motor_states_.end(), vesc_can::MotorState{});
+    std::fill(motor_states_.begin(), motor_states_.end(), vesc_can_driver::MotorState{});
     cache_interface_handles();
     const auto hardware_node = get_node();
     auto node_options = rclcpp::NodeOptions().use_global_arguments(false);
@@ -199,7 +200,7 @@ hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecyc
     auto can_node = std::make_shared<rclcpp::Node>(
       get_hardware_info().name + "_can_io", node_namespace, node_options);
     can_transport_ =
-      std::make_unique<vesc_can::CanTransport>(motor_configs_, transport_options_, can_node);
+      std::make_unique<vesc_can_driver::CanTransport>(motor_configs_, transport_options_, can_node);
     can_transport_->start();
     return hardware_interface::CallbackReturn::SUCCESS;
   } catch (const std::exception &error) {
@@ -219,7 +220,7 @@ hardware_interface::CallbackReturn VescSystem::on_activate(const rclcpp_lifecycl
   for (std::size_t motor_index = 0; motor_index < motor_configs_.size(); ++motor_index) {
     const auto &motor_config = motor_configs_[motor_index];
     const double initial_command =
-      motor_config.control_mode == vesc_can::ControlMode::Position
+      motor_config.control_mode == vesc_can_driver::ControlMode::Position
         ? std::clamp(motor_states_[motor_index].joint_position_rad,
             motor_config.min_joint_position_rad, motor_config.max_joint_position_rad)
         : 0.0;
@@ -264,40 +265,40 @@ hardware_interface::CallbackReturn VescSystem::on_error(const rclcpp_lifecycle::
 }
 
 double VescSystem::read_state_value(
-  const StateHandle &state_handle, vesc_can::TimePoint current_time) const
+  const StateHandle &state_handle, vesc_can_driver::TimePoint current_time) const
 {
   const auto &motor_state = motor_states_[state_handle.motor_index];
   const auto &motor_config = motor_configs_[state_handle.motor_index];
   const auto timeout = motor_config.feedback_timeout;
-  const bool status_1_fresh = vesc_can::feedback_is_fresh(
+  const bool status_1_fresh = vesc_can_driver::feedback_is_fresh(
     motor_state.has_status_1, motor_state.status_1_received_at, current_time, timeout);
-  const bool status_4_fresh = vesc_can::feedback_is_fresh(
+  const bool status_4_fresh = vesc_can_driver::feedback_is_fresh(
     motor_state.has_status_4, motor_state.status_4_received_at, current_time, timeout);
-  const bool status_5_fresh = vesc_can::feedback_is_fresh(
+  const bool status_5_fresh = vesc_can_driver::feedback_is_fresh(
     motor_state.has_status_5, motor_state.status_5_received_at, current_time, timeout);
   switch (state_handle.field) {
     case StateField::Position: {
-      const bool position_fresh = motor_config.control_mode == vesc_can::ControlMode::Position
-                                    ? status_4_fresh
-                                    : status_5_fresh;
-      return position_fresh ? motor_state.joint_position_rad : vesc_can::kUnknownValue;
+      const bool position_fresh =
+        motor_config.control_mode == vesc_can_driver::ControlMode::Position ? status_4_fresh
+                                                                            : status_5_fresh;
+      return position_fresh ? motor_state.joint_position_rad : vesc_can_driver::kUnknownValue;
     }
     case StateField::Velocity:
-      return status_1_fresh ? motor_state.joint_velocity_rad_s : vesc_can::kUnknownValue;
+      return status_1_fresh ? motor_state.joint_velocity_rad_s : vesc_can_driver::kUnknownValue;
     case StateField::Current:
-      return status_1_fresh
-               ? vesc_can::motor_current_to_joint_current(motor_config, motor_state.motor_current_a)
-               : vesc_can::kUnknownValue;
+      return status_1_fresh ? vesc_can_driver::motor_current_to_joint_current(
+                                motor_config, motor_state.motor_current_a)
+                            : vesc_can_driver::kUnknownValue;
     case StateField::TemperatureFet:
-      return status_4_fresh ? motor_state.temperature_fet_c : vesc_can::kUnknownValue;
+      return status_4_fresh ? motor_state.temperature_fet_c : vesc_can_driver::kUnknownValue;
     case StateField::TemperatureMotor:
-      return status_4_fresh ? motor_state.temperature_motor_c : vesc_can::kUnknownValue;
+      return status_4_fresh ? motor_state.temperature_motor_c : vesc_can_driver::kUnknownValue;
     case StateField::InputVoltage:
-      return status_5_fresh ? motor_state.input_voltage_v : vesc_can::kUnknownValue;
+      return status_5_fresh ? motor_state.input_voltage_v : vesc_can_driver::kUnknownValue;
     case StateField::DutyCycle:
-      return status_1_fresh ? motor_state.duty_cycle : vesc_can::kUnknownValue;
+      return status_1_fresh ? motor_state.duty_cycle : vesc_can_driver::kUnknownValue;
   }
-  return vesc_can::kUnknownValue;
+  return vesc_can_driver::kUnknownValue;
 }
 
 hardware_interface::return_type VescSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
@@ -307,14 +308,14 @@ hardware_interface::return_type VescSystem::read(const rclcpp::Time &, const rcl
   }
   // A busy mailbox retains the last snapshot; the same freshness checks still apply.
   can_transport_->try_snapshot(motor_states_);
-  const auto current_time = vesc_can::SteadyClock::now();
+  const auto current_time = vesc_can_driver::SteadyClock::now();
   if (active_) {
     if (can_transport_->faulted()) {
       can_transport_->request_stop();
       return hardware_interface::return_type::ERROR;
     }
     for (std::size_t motor_index = 0; motor_index < motor_configs_.size(); ++motor_index) {
-      if (!vesc_can::state_ready(
+      if (!vesc_can_driver::state_ready(
             motor_configs_[motor_index], motor_states_[motor_index], current_time)) {
         can_transport_->request_stop();
         return hardware_interface::return_type::ERROR;
@@ -339,7 +340,8 @@ hardware_interface::return_type VescSystem::write(const rclcpp::Time &, const rc
     if (!get_command(command_handles_[motor_index], motor_commands_[motor_index], false)) {
       return hardware_interface::return_type::OK;  // Retry next cycle; the previous batch expires.
     }
-    if (!vesc_can::command_is_valid(motor_configs_[motor_index], motor_commands_[motor_index])) {
+    if (!vesc_can_driver::command_is_valid(
+          motor_configs_[motor_index], motor_commands_[motor_index])) {
       can_transport_->request_stop();
       return hardware_interface::return_type::ERROR;
     }

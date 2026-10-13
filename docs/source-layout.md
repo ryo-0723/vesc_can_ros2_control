@@ -6,13 +6,13 @@
 
 | ファイル | 役割 | 使用先 |
 |---|---|---|
-| `vesc_can/src/vesc_protocol.cpp` | CAN 指令の encode と STATUS1〜6 の decode | `vesc_can::protocol` |
-| `vesc_can/src/driver_core.cpp` | 関節単位変換、制御モード、範囲・期限の検査、全台停止 | `vesc_can::core` |
-| `vesc_can/src/can_transport.cpp` | ROS の CAN トピックと専用 executor、指令の受け渡し | `vesc_can::transport` |
-| `vesc_can/src/vesc_state_conversion.cpp` | 受信した生値から `vesc_msgs` への変換 | `vesc_can::state_conversion` |
-| `vesc_can/src/vesc_node.cpp` | トピック・サービスで動かす通常ノード | `vesc_node` |
+| `vesc_can_driver/src/vesc_protocol.cpp` | CAN 指令の encode と STATUS1〜6 の decode | `vesc_can_driver::protocol` |
+| `vesc_can_driver/src/driver_core.cpp` | 関節単位変換、制御モード、範囲・期限の検査、全台停止 | `vesc_can_driver::core` |
+| `vesc_can_driver/src/can_transport.cpp` | ROS の CAN トピックと専用 executor、指令の受け渡し | `vesc_can_driver::transport` |
+| `vesc_can_driver/src/vesc_state_conversion.cpp` | 受信した生値から `vesc_msgs` への変換 | `vesc_can_driver::state_conversion` |
+| `vesc_can_driver/src/vesc_node.cpp` | トピック・サービスで動かす通常ノード | `vesc_node` |
 | `vesc_can_ros2_control/src/vesc_system.cpp` | ros2_control の設定、lifecycle、read/write | `vesc_hardware` |
-| `vesc_can/test/support/fake_vesc_node.cpp` | CAN 指令に応答する模擬 VESC | `fake_vesc_node`、デモと統合テスト |
+| `vesc_can_driver/test/support/fake_vesc_node.cpp` | CAN 指令に応答する模擬 VESC | `fake_vesc_node`、デモと統合テスト |
 
 現在の `src` に未使用の `.cpp` はありません。protocol、core、transport、state_conversion は
 別々のライブラリで、単独利用と通常ノード・hardware plugin 間の共通化に使います。
@@ -68,7 +68,7 @@ ROS トピック・サービス・パラメータ、URDF の interface 名、上
 `use_mock:=true` と統合テストが利用するため削除していません。
 デモを利用できるよう、`BUILD_TESTING=OFF` でもビルド・インストールします。
 
-`vesc_can/test` はプロトコル・共通ドライバ・通信・状態メッセージ変換のテスト、
+`vesc_can_driver/test` はプロトコル・共通ドライバ・通信・状態メッセージ変換のテスト、
 `vesc_can_ros2_control/test` は設定と実プロセスを起動する統合テストです。
 `config`、`launch`、`urdf` はインストール後の起動例に必要です。
 `vesc_msgs` は `VescState.msg` と `VescStateStamped.msg` の 2 個と、それを生成する
