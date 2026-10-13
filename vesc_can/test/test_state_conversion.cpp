@@ -2,9 +2,9 @@
 #include <cmath>
 
 #include "gtest/gtest.h"
-#include "vesc_can_ros2_control/vesc_telemetry.hpp"
+#include "vesc_can/vesc_state_conversion.hpp"
 
-namespace vesc_can_ros2_control
+namespace vesc_can
 {
 namespace
 {
@@ -21,7 +21,7 @@ can_msgs::msg::Frame status_frame(
   return frame;
 }
 
-MotorConfig telemetry_config()
+MotorConfig state_conversion_config()
 {
   MotorConfig motor_config;
   motor_config.name = "drive_joint";
@@ -45,9 +45,9 @@ void receive_all_statuses(DriverCore &driver_core, TimePoint received_at)
     driver_core.receive(status_frame(58, {4, 76, 8, 152, 12, 228, 254, 12}), received_at));
 }
 
-TEST(Telemetry, NativeValuesKeepUpstreamUnitsAndControllerIdentity)
+TEST(StateConversion, NativeValuesKeepUpstreamUnitsAndControllerIdentity)
 {
-  const auto motor_config = telemetry_config();
+  const auto motor_config = state_conversion_config();
   DriverCore driver_core({motor_config});
   const auto received_at = TimePoint(1s);
   receive_all_statuses(driver_core, received_at);
@@ -55,7 +55,7 @@ TEST(Telemetry, NativeValuesKeepUpstreamUnitsAndControllerIdentity)
   const auto message = make_vesc_state(motor_config, motor_state, received_at);
   EXPECT_EQ(message.controller_id, 11);
   EXPECT_DOUBLE_EQ(message.speed, 420.0);  // Raw ERPM, despite reversed gearing.
-  EXPECT_NEAR(motor_state.velocity, -kPi, 1e-9);
+  EXPECT_NEAR(motor_state.joint_velocity_rad_s, -kPi, 1e-9);
   EXPECT_DOUBLE_EQ(message.current_motor, 1.5);
   EXPECT_DOUBLE_EQ(message.duty_cycle, 0.5);
   EXPECT_DOUBLE_EQ(message.current_input, 1.2);
@@ -72,9 +72,9 @@ TEST(Telemetry, NativeValuesKeepUpstreamUnitsAndControllerIdentity)
   EXPECT_DOUBLE_EQ(motor_state.ppm, -0.5);
 }
 
-TEST(Telemetry, MissingValuesAndDeviceFaultAreNeverReportedAsHealthyZeros)
+TEST(StateConversion, MissingValuesAndDeviceFaultAreNeverReportedAsHealthyZeros)
 {
-  const auto motor_config = telemetry_config();
+  const auto motor_config = state_conversion_config();
   const auto message = make_vesc_state(motor_config, MotorState{}, TimePoint(1s));
   const std::array unavailable_values = {message.speed, message.current_motor,
     message.current_input, message.temp_fet, message.temp_motor, message.duty_cycle,
@@ -90,9 +90,9 @@ TEST(Telemetry, MissingValuesAndDeviceFaultAreNeverReportedAsHealthyZeros)
   EXPECT_EQ(message.distance_traveled, kUnavailableVescInteger);
 }
 
-TEST(Telemetry, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForControl)
+TEST(StateConversion, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForControl)
 {
-  const auto motor_config = telemetry_config();
+  const auto motor_config = state_conversion_config();
   DriverCore driver_core({motor_config});
   const auto received_at = TimePoint(1s);
   const auto rpm_frame = status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244});
@@ -110,4 +110,4 @@ TEST(Telemetry, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForControl)
   EXPECT_EQ(message.displacement, -42);  // Last count; status_5_fresh becomes false.
 }
 }  // namespace
-}  // namespace vesc_can_ros2_control
+}  // namespace vesc_can

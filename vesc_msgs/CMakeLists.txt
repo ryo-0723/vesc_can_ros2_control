@@ -1,25 +1,17 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 project(vesc_msgs)
 
-find_package(ament_cmake_auto REQUIRED)
-ament_auto_find_build_dependencies()
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(vesc_msgs
   "msg/VescState.msg"
   "msg/VescStateStamped.msg"
-  "msg/VescImu.msg"
-  "msg/VescImuStamped.msg"
-  DEPENDENCIES
-    builtin_interfaces
-    std_msgs
-    geometry_msgs
+  DEPENDENCIES std_msgs
 )
-
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
-endif()
 
 install(FILES LICENSE UPSTREAM.md DESTINATION share/${PROJECT_NAME})
 
-ament_auto_package()
+ament_export_dependencies(rosidl_default_runtime)
+ament_package()

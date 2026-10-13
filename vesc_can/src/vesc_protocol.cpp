@@ -1,4 +1,4 @@
-#include "vesc_can_ros2_control/vesc_protocol.hpp"
+#include "vesc_can/vesc_protocol.hpp"
 
 #include <bit>
 #include <cmath>
@@ -6,11 +6,12 @@
 #include <limits>
 #include <stdexcept>
 
-namespace vesc_can_ros2_control::protocol
+namespace vesc_can::protocol
 {
 namespace
 {
 constexpr std::size_t kCommandPayloadSize = 4;
+constexpr std::uint8_t kStatusPayloadSize = 8;
 constexpr double kCurrentCommandScale = 1000.0;
 constexpr double kPositionCommandScale = 1000000.0;
 
@@ -43,11 +44,10 @@ std::int32_t scale_command_value(double value, double scale)
   return static_cast<std::int32_t>(std::llround(scaled_value));
 }
 
-bool is_valid_status_frame(
-  const can_msgs::msg::Frame &frame, std::uint32_t packet_id, std::uint8_t expected_dlc)
+bool is_valid_status_frame(const can_msgs::msg::Frame &frame, std::uint32_t packet_id)
 {
   return frame.is_extended && !frame.is_rtr && !frame.is_error && frame.id <= kExtendedCanIdMask &&
-         frame.dlc == expected_dlc && (frame.id >> kPacketIdShift) == packet_id;
+         frame.dlc == kStatusPayloadSize && (frame.id >> kPacketIdShift) == packet_id;
 }
 
 std::int32_t read_signed_32(const can_msgs::msg::Frame &frame, std::size_t offset)
@@ -67,51 +67,39 @@ std::int32_t read_signed_16(const can_msgs::msg::Frame &frame, std::size_t offse
 }
 }  // namespace
 
-can_msgs::msg::Frame make_set_rpm_frame(std::uint8_t controller_id, std::int32_t erpm)
+can_msgs::msg::Frame make_set_rpm_frame(std::uint8_t controller_id, std::int32_t electrical_rpm)
 {
-  return make_command_frame(controller_id, kSetRpmId, erpm);
+  return make_command_frame(controller_id, kSetRpmId, electrical_rpm);
 }
 
-can_msgs::msg::Frame make_set_current_frame(std::uint8_t controller_id, double current_a)
+can_msgs::msg::Frame make_set_current_frame(std::uint8_t controller_id, double motor_current_a)
 {
   return make_command_frame(
-    controller_id, kSetCurrentId, scale_command_value(current_a, kCurrentCommandScale));
+    controller_id, kSetCurrentId, scale_command_value(motor_current_a, kCurrentCommandScale));
 }
 
-can_msgs::msg::Frame make_set_position_frame(std::uint8_t controller_id, double position_deg)
+can_msgs::msg::Frame make_set_position_frame(
+  std::uint8_t controller_id, double motor_pid_position_deg)
 {
-  return make_command_frame(
-    controller_id, kSetPositionId, scale_command_value(position_deg, kPositionCommandScale));
+  return make_command_frame(controller_id, kSetPositionId,
+    scale_command_value(motor_pid_position_deg, kPositionCommandScale));
 }
 
 bool decode_status_1(const can_msgs::msg::Frame &frame, Status1 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus1Id, 8)) {
+  if (!is_valid_status_frame(frame, kStatus1Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
-  status.erpm = read_signed_32(frame, 0);
-  status.current_a = read_signed_16(frame, 4) / 10.0;
+  status.electrical_rpm = read_signed_32(frame, 0);
+  status.motor_current_a = read_signed_16(frame, 4) / 10.0;
   status.duty_cycle = read_signed_16(frame, 6) / 1000.0;
-  return true;
-}
-
-bool decode_status_4(const can_msgs::msg::Frame &frame, Status4 &status)
-{
-  if (!is_valid_status_frame(frame, kStatus4Id, 8)) {
-    return false;
-  }
-  status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
-  status.temperature_fet_c = read_signed_16(frame, 0) / 10.0;
-  status.temperature_motor_c = read_signed_16(frame, 2) / 10.0;
-  status.input_current_a = read_signed_16(frame, 4) / 10.0;
-  status.position_deg = read_signed_16(frame, 6) / 50.0;
   return true;
 }
 
 bool decode_status_2(const can_msgs::msg::Frame &frame, Status2 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus2Id, 8)) {
+  if (!is_valid_status_frame(frame, kStatus2Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -122,7 +110,7 @@ bool decode_status_2(const can_msgs::msg::Frame &frame, Status2 &status)
 
 bool decode_status_3(const can_msgs::msg::Frame &frame, Status3 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus3Id, 8)) {
+  if (!is_valid_status_frame(frame, kStatus3Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -131,23 +119,34 @@ bool decode_status_3(const can_msgs::msg::Frame &frame, Status3 &status)
   return true;
 }
 
-bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status)
+bool decode_status_4(const can_msgs::msg::Frame &frame, Status4 &status)
 {
-  // Official firmware sends eight bytes (the last two are reserved).
-  // Also accept the existing six-byte form containing the complete known payload.
-  if (!is_valid_status_frame(frame, kStatus5Id, 8) &&
-      !is_valid_status_frame(frame, kStatus5Id, 6)) {
+  if (!is_valid_status_frame(frame, kStatus4Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
-  status.tachometer = read_signed_32(frame, 0);
+  status.temperature_fet_c = read_signed_16(frame, 0) / 10.0;
+  status.temperature_motor_c = read_signed_16(frame, 2) / 10.0;
+  status.input_current_a = read_signed_16(frame, 4) / 10.0;
+  status.motor_pid_position_deg = read_signed_16(frame, 6) / 50.0;
+  return true;
+}
+
+bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status)
+{
+  // VESC 6 sends eight bytes, including two reserved bytes that are not decoded.
+  if (!is_valid_status_frame(frame, kStatus5Id)) {
+    return false;
+  }
+  status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
+  status.tachometer_counts = read_signed_32(frame, 0);
   status.input_voltage_v = read_signed_16(frame, 4) / 10.0;
   return true;
 }
 
 bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus6Id, 8)) {
+  if (!is_valid_status_frame(frame, kStatus6Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -157,4 +156,4 @@ bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status)
   status.ppm = read_signed_16(frame, 6) / 1000.0;
   return true;
 }
-}  // namespace vesc_can_ros2_control::protocol
+}  // namespace vesc_can::protocol

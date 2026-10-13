@@ -3,8 +3,8 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "vesc_can_ros2_control/can_transport.hpp"
-namespace vesc_can_ros2_control
+#include "vesc_can/can_transport.hpp"
+namespace vesc_can
 {
 namespace
 {
@@ -29,16 +29,16 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
   motor_config.command_timeout = 100ms;
   motor_config.feedback_timeout = 100ms;
   TransportOptions transport_options;
-  transport_options.tx_topic = "/transport_test/tx";
-  transport_options.rx_topic = "/transport_test/rx";
-  transport_options.period = 5ms;
+  transport_options.can_tx_topic = "/transport_test/tx";
+  transport_options.can_rx_topic = "/transport_test/rx";
+  transport_options.send_period = 5ms;
   auto peer_node = std::make_shared<rclcpp::Node>("transport_test_peer");
   auto can_node = std::make_shared<rclcpp::Node>("transport_test_io");
   auto feedback_publisher = peer_node->create_publisher<can_msgs::msg::Frame>(
-    transport_options.rx_topic, rclcpp::SensorDataQoS());
+    transport_options.can_rx_topic, rclcpp::SensorDataQoS());
   std::vector<can_msgs::msg::Frame> received_frames;
   auto command_subscription =
-    peer_node->create_subscription<can_msgs::msg::Frame>(transport_options.tx_topic, 100,
+    peer_node->create_subscription<can_msgs::msg::Frame>(transport_options.can_tx_topic, 100,
       [&](can_msgs::msg::Frame::ConstSharedPtr frame) { received_frames.push_back(*frame); });
   bool publish_feedback = true;
   auto feedback_timer = peer_node->create_wall_timer(10ms, [&]() {
@@ -66,7 +66,7 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
     }
     return predicate();
   };
-  ASSERT_TRUE(spin_peer_until([&]() { return can_transport.snapshot()[0].have_status1; }, 2s));
+  ASSERT_TRUE(spin_peer_until([&]() { return can_transport.snapshot()[0].has_status_1; }, 2s));
   ASSERT_TRUE(can_transport.enable());
   // Multiple pending updates collapse to the latest value.
   ASSERT_TRUE(can_transport.set_command(0, 1.0));
@@ -104,7 +104,18 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
   EXPECT_FALSE(can_transport.enable());
   publish_feedback = true;
   ASSERT_TRUE(spin_peer_until(
-    [&]() { return can_transport.snapshot()[0].status1_time > SteadyClock::now() - 30ms; }, 300ms));
+    [&]() { return can_transport.snapshot()[0].status_1_received_at > SteadyClock::now() - 30ms; },
+    300ms));
+  ASSERT_TRUE(can_transport.enable());
+  for (double invalid : {kUnknownValue, 1000.0}) {
+    EXPECT_FALSE(can_transport.set_command(0, invalid));
+    EXPECT_FALSE(can_transport.set_command(0, 1.0));  // A valid update cannot hide invalid input.
+    ASSERT_TRUE(spin_peer_until([&]() { return can_transport.faulted(); }, 100ms));
+    ASSERT_TRUE(can_transport.enable());
+  }
+  EXPECT_FALSE(can_transport.try_set_commands({kUnknownValue}));
+  EXPECT_FALSE(can_transport.try_set_commands({1.0}));
+  ASSERT_TRUE(spin_peer_until([&]() { return can_transport.faulted(); }, 100ms));
   ASSERT_TRUE(can_transport.enable());
   can_transport.request_stop();
   ASSERT_TRUE(spin_peer_until([&]() { return can_transport.faulted(); }, 100ms));
@@ -118,4 +129,4 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
 }
 
 }  // namespace
-}  // namespace vesc_can_ros2_control
+}  // namespace vesc_can

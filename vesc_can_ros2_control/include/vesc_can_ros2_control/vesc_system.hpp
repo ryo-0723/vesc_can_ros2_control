@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "hardware_interface/system_interface.hpp"
-#include "vesc_can_ros2_control/can_transport.hpp"
+#include "vesc_can/can_transport.hpp"
 
 namespace vesc_can_ros2_control
 {
@@ -15,7 +15,7 @@ class VescSystem : public hardware_interface::SystemInterface
 {
 public:
   hardware_interface::CallbackReturn on_init(
-    const hardware_interface::HardwareComponentInterfaceParams &params) override;
+    const hardware_interface::HardwareComponentInterfaceParams &parameters) override;
   hardware_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State &) override;
   hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State &) override;
   hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override;
@@ -43,19 +43,19 @@ private:
     hardware_interface::StateInterface::SharedPtr handle;
   };
   static StateField state_field_from_name(const std::string &interface_name);
-  static MotorConfig load_joint_config(const hardware_interface::ComponentInfo &joint);
+  static vesc_can::MotorConfig load_joint_config(const hardware_interface::ComponentInfo &joint);
   void cache_interface_handles();
   void release_can_transport();
-  double read_state_value(const StateHandle &state_handle, TimePoint now) const;
+  double read_state_value(const StateHandle &state_handle, vesc_can::TimePoint current_time) const;
 
-  std::vector<MotorConfig> motor_configs_;
-  std::vector<MotorState> motor_states_;
+  std::vector<vesc_can::MotorConfig> motor_configs_;
+  std::vector<vesc_can::MotorState> motor_states_;
   std::vector<double> motor_commands_;
   std::vector<hardware_interface::CommandInterface::SharedPtr> command_handles_;
   std::vector<StateHandle> state_handles_;
-  TransportOptions transport_options_;
+  vesc_can::TransportOptions transport_options_;
   std::chrono::milliseconds activation_timeout_{2000};
-  std::unique_ptr<CanTransport> can_transport_;
+  std::unique_ptr<vesc_can::CanTransport> can_transport_;
   bool active_{false};
 };
 }  // namespace vesc_can_ros2_control

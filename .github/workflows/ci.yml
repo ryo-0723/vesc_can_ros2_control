@@ -20,16 +20,31 @@ jobs:
           apt-get install -y python3-colcon-common-extensions python3-rosdep clang-format black
           rosdep update --rosdistro lyrical
           rosdep install --from-paths ws/src/vesc_can_ros2_control --ignore-src -r -y --rosdistro lyrical
+          # Keep image libraries compatible with freshly installed ROS dependencies.
+          dpkg-query -W -f='${binary:Package}\n' 'ros-lyrical-*' \
+            | xargs apt-cache policy \
+            | awk '/^[^ ]/ {pkg=$1; sub(/:$/, "", pkg)} /Candidate:/ && $2 != "(none)" {print pkg}' \
+            | xargs -r apt-get install -y --only-upgrade
       - name: Check formatting
         run: |
           clang-format --dry-run --Werror \
+            ws/src/vesc_can_ros2_control/vesc_can/include/vesc_can/*.hpp \
+            ws/src/vesc_can_ros2_control/vesc_can/src/*.cpp \
+            ws/src/vesc_can_ros2_control/vesc_can/test/*.cpp \
+            ws/src/vesc_can_ros2_control/vesc_can/test/support/*.cpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/include/vesc_can_ros2_control/*.hpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/src/*.cpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test/*.cpp
           black --check --line-length 100 \
+            ws/src/vesc_can_ros2_control/vesc_can/launch \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/launch \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test/test_integration.py
-      - name: Build
+      - name: Build CAN driver independently
+        working-directory: ws
+        run: |
+          source /opt/ros/lyrical/setup.bash
+          colcon build --packages-up-to vesc_can --packages-ignore vesc_can_ros2_control --cmake-args -DBUILD_TESTING=ON
+      - name: Build ros2_control plugin
         working-directory: ws
         run: |
           source /opt/ros/lyrical/setup.bash
@@ -39,5 +54,5 @@ jobs:
         run: |
           source /opt/ros/lyrical/setup.bash
           source install/setup.bash
-          colcon test --packages-select vesc_can_ros2_control --event-handlers console_direct+
+          colcon test --packages-select vesc_can vesc_can_ros2_control --event-handlers console_direct+
           colcon test-result --verbose

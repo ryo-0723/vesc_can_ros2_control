@@ -1,5 +1,20 @@
 # 構成・スレッド・複数台
 
+## パッケージの分担
+
+| パッケージ | 内容 | 他のパッケージとの関係 |
+|---|---|---|
+| vesc_can | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC | vesc_msgs を使用。ros2_control への依存なし |
+| vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can の transport ライブラリを使用 |
+| vesc_msgs | 上流由来の ROS メッセージ | 両ドライバとは独立したインターフェース定義 |
+
+`vesc_can::protocol` は encode/decode だけの公開 CMake target です。
+共通の状態管理は `vesc_can::core`、CAN トピック処理は `vesc_can::transport`、
+vesc_msgs への変換は `vesc_can::state_conversion` に分けてリンクできます。
+protocol/core は ROS ノードを起動しません。
+パッケージを分割しても、ライブラリ間の呼び出しにトピック中継や追加スレッドは
+発生しません。実行時の CAN executor と mailbox の構成は以下のとおりです。
+
 ```mermaid
 flowchart LR
   C[ros2_control controllers] --> H[VescSystem: read / write]
@@ -64,7 +79,7 @@ executor の境界で処理し、デストラクタから例外を出しませ�
 これは DLC・bit stuffing・他ノード・再送などで変わる概算で、測定値ではありません。
 必要な STATUS と周期を選び、バス負荷を測定してください。
 
-検証はまず模擬 2 台での機能確認です。8 台以上での負荷試験、Zenoh pico を含む
+検証は模擬 2 台と 4 モード混在の模擬 4 台での機能確認です。8 台以上での負荷試験、Zenoh pico を含む
 途絶・遅延試験、実 VESC での角度・電流・停止の確認は今後の実機導入作業です。
 
 ## 外部パッケージとの関係

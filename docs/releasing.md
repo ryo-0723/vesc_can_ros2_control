@@ -4,19 +4,30 @@
 できない、というルールはありません。本リポジトリでは用途に合わせて提供します。
 C++ の特殊な機能を増やすことも公開条件ではありません。
 
-現在は Lyrical を対象にした開発用の実装と自動テストです。公開用メタデータ、
-実機検証、リリース手続きは残っています。GitHub の public 化だけでは ROS apt に入りません。
+現在は Lyrical を対象にした開発用の実装と自動テストです。ドライバの maintainer と
+repository / bugtracker URL は設定済みです。権利・メタデータの最終確認、実機検証、
+リリース手続きは残っています。GitHub の public 化だけでは ROS apt に入りません。
+
+このリポジトリは `vesc_can`、`vesc_can_ros2_control`、`vesc_msgs` の 3 パッケージです。
+CAN の encode/decode・通常ノードは `vesc_can`、hardware plugin は
+`vesc_can_ros2_control` が担当します。後者だけが ros2_control に依存します。
+各パッケージの依存を package.xml へ記載し、リリース時もこの依存順で解決します。
 
 1. VESC の実機、CAN 中継器、Zenoh pico を含めて単位・位置範囲・指令途絶・通信途絶・
    再接続を検証する。利用できる VESC firmware、ROS バージョン、ゲートウェイ条件を記録する。
-2. package.xml の maintainer `root@todo.todo` を開発者の実際の名前・連絡先へ更新する。
+2. ドライバ 2 パッケージの maintainer は
+   `ryo-0723 <tengbenliang742@gmail.com>` に設定している。公開前に連絡先と
+   repository URL を確認する。
    初期コードの権利・出典を確認する。リポジトリの LICENSE は MIT だが、コピー元の権利確認を省略しない。
    同梱 `vesc_msgs` のライセンスは BSD-3-Clause で、同ディレクトリの LICENSE と
-   上流の著者・メタデータを保持している。実際に自分でリリースを管理する場合は、
-   著者情報を残したまま maintainer、repository URL、バージョンを実態に合わせる。
+   上流の著者を保持している。状態 msg 2 個だけをコピーした同梱版の maintainer、
+   repository URL、バージョンはローカル管理として設定している。
+   ドライバの MIT ライセンス原本はルートの 1 個に集約し、インストール時に各
+   パッケージの share へコピーする。パッケージを個別の release archive へ切り出す際は、
+   この共有原本を含めるか、release 用に各パッケージへ配置して install パスを調整する。
 3. `vesc_msgs` を対象 distro へリリース済みの依存として解決できるようにする。
    現在の Lyrical rosdistro 一覧には `vesc_msgs` がないため、開発・CI は
-   リポジトリ内へ同梱した f1tenth ROS 2 版をビルドする。取り込み元は
+   リポジトリ内へ同梱した f1tenth ROS 2 版の状態 msg 2 個をビルドする。取り込み元は
    [vesc_msgs/UPSTREAM.md](../vesc_msgs/UPSTREAM.md) に記録している。
    同梱だけでは apt 公開は完了しない。メッセージの上流メンテナと調整し、
    同梱 `vesc_msgs` も対象 distro へリリースするか、上流が対象 distro へ

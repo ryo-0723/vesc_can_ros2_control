@@ -2,20 +2,17 @@
 <package format="3">
   <name>vesc_can_ros2_control</name>
   <version>0.1.0</version>
-  <description>VESC native CAN frame driver and multi-joint ros2_control hardware plugin.</description>
-  <maintainer email="root@todo.todo">root</maintainer>
+  <description>Multi-joint ros2_control hardware plugin using the vesc_can driver.</description>
+  <maintainer email="tengbenliang742@gmail.com">ryo-0723</maintainer>
   <license>MIT</license>
+  <url type="repository">https://github.com/ryo-0723/vesc_can_ros2_control</url>
+  <url type="bugtracker">https://github.com/ryo-0723/vesc_can_ros2_control/issues</url>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <depend>can_msgs</depend>
-  <depend>diagnostic_msgs</depend>
+  <depend>vesc_can</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
-  <depend>sensor_msgs</depend>
-  <depend>std_msgs</depend>
-  <depend>std_srvs</depend>
-  <depend>vesc_msgs</depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>forward_command_controller</exec_depend>
@@ -27,6 +24,12 @@
   <test_depend>launch_testing_ament_cmake</test_depend>
   <test_depend>launch_testing_ros</test_depend>
   <test_depend>rclpy</test_depend>
+  <test_depend>can_msgs</test_depend>
+  <test_depend>diagnostic_msgs</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>std_srvs</test_depend>
+  <test_depend>vesc_msgs</test_depend>
   <test_depend>controller_manager_msgs</test_depend>
   <test_depend>rcl_interfaces</test_depend>
   <export><build_type>ament_cmake</build_type></export>

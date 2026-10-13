@@ -11,9 +11,9 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
-#include "vesc_can_ros2_control/driver_core.hpp"
+#include "vesc_can/driver_core.hpp"
 
-namespace vesc_can_ros2_control
+namespace vesc_can
 {
 namespace
 {
@@ -84,9 +84,9 @@ private:
   struct FakeMotor
   {
     std::uint8_t controller_id{};
-    double erpm{};
-    double position_rad{};
-    double current_a{};
+    double electrical_rpm{};
+    double motor_position_rad{};
+    double motor_current_a{};
     TimePoint last_command_time{};
   };
 
@@ -97,33 +97,33 @@ private:
       return;
     }
     const auto controller_id = frame.id & protocol::kControllerIdMask;
-    const auto motor =
+    const auto motor_it =
       std::find_if(motors_.begin(), motors_.end(), [controller_id](const FakeMotor &candidate) {
         return candidate.controller_id == controller_id;
       });
-    if (motor == motors_.end()) {
+    if (motor_it == motors_.end()) {
       return;
     }
     const auto packet_id = frame.id >> protocol::kPacketIdShift;
     const auto command_value = read_command_payload(frame.data);
     switch (packet_id) {
       case protocol::kSetRpmId:
-        motor->erpm = command_value;
-        motor->current_a = 0.0;
+        motor_it->electrical_rpm = command_value;
+        motor_it->motor_current_a = 0.0;
         break;
       case protocol::kSetPositionId:
-        motor->position_rad = command_value / 1e6 * kPi / 180.0;
-        motor->erpm = 0.0;
-        motor->current_a = 0.0;
+        motor_it->motor_position_rad = command_value / 1e6 * kPi / 180.0;
+        motor_it->electrical_rpm = 0.0;
+        motor_it->motor_current_a = 0.0;
         break;
       case protocol::kSetCurrentId:
-        motor->current_a = command_value / 1000.0;
-        motor->erpm = motor->current_a * 1000.0;
+        motor_it->motor_current_a = command_value / 1000.0;
+        motor_it->electrical_rpm = motor_it->motor_current_a * 1000.0;
         break;
       default:
         return;
     }
-    motor->last_command_time = SteadyClock::now();
+    motor_it->last_command_time = SteadyClock::now();
   }
 
   can_msgs::msg::Frame make_status_frame(
@@ -140,8 +140,8 @@ private:
   void publish_motor_feedback(const FakeMotor &motor)
   {
     auto status_1 = make_status_frame(motor, protocol::kStatus1Id, 8);
-    write_big_endian(status_1.data, 0, std::llround(motor.erpm), 4);
-    write_big_endian(status_1.data, 4, std::llround(motor.current_a * 10.0), 2);
+    write_big_endian(status_1.data, 0, std::llround(motor.electrical_rpm), 4);
+    write_big_endian(status_1.data, 4, std::llround(motor.motor_current_a * 10.0), 2);
     feedback_publisher_->publish(status_1);
 
     auto status_2 = make_status_frame(motor, protocol::kStatus2Id, 8);
@@ -153,19 +153,19 @@ private:
     write_big_endian(status_3.data, 4, 10000, 4);   // Fixture: 1 Wh regenerated.
     feedback_publisher_->publish(status_3);
 
-    double position_deg = std::fmod(motor.position_rad * 180.0 / kPi, 360.0);
-    if (position_deg < 0.0) {
-      position_deg += 360.0;
+    double motor_pid_position_deg = std::fmod(motor.motor_position_rad * 180.0 / kPi, 360.0);
+    if (motor_pid_position_deg < 0.0) {
+      motor_pid_position_deg += 360.0;
     }
     auto status_4 = make_status_frame(motor, protocol::kStatus4Id, 8);
     write_big_endian(status_4.data, 0, 300, 2);  // FET temperature: 30 C.
     write_big_endian(status_4.data, 2, 310, 2);  // Motor temperature: 31 C.
-    write_big_endian(status_4.data, 6, std::llround(position_deg * 50.0), 2);
+    write_big_endian(status_4.data, 6, std::llround(motor_pid_position_deg * 50.0), 2);
     feedback_publisher_->publish(status_4);
 
     auto status_5 = make_status_frame(motor, protocol::kStatus5Id, 8);
     const auto tachometer_counts =
-      std::llround(motor.position_rad * 6.0 * pole_pairs_ / (2.0 * kPi));
+      std::llround(motor.motor_position_rad * 6.0 * pole_pairs_ / (2.0 * kPi));
     write_big_endian(status_5.data, 0, tachometer_counts, 4);
     write_big_endian(status_5.data, 4, 240, 2);  // Input voltage: 24 V.
     feedback_publisher_->publish(status_5);
@@ -187,10 +187,11 @@ private:
     const bool publish_feedback = get_parameter("publish_feedback").as_bool();
     for (auto &motor : motors_) {
       if (current_time - motor.last_command_time > command_watchdog_timeout_) {
-        motor.erpm = 0.0;
-        motor.current_a = 0.0;
+        motor.electrical_rpm = 0.0;
+        motor.motor_current_a = 0.0;
       }
-      motor.position_rad += motor.erpm * 2.0 * kPi / (60.0 * pole_pairs_) * elapsed_seconds;
+      motor.motor_position_rad +=
+        motor.electrical_rpm * 2.0 * kPi / (60.0 * pole_pairs_) * elapsed_seconds;
       if (publish_feedback) {
         publish_motor_feedback(motor);
       }
@@ -205,14 +206,14 @@ private:
   rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr command_subscription_;
   rclcpp::TimerBase::SharedPtr feedback_timer_;
 };
-}  // namespace vesc_can_ros2_control
+}  // namespace vesc_can
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   int exit_code = 0;
   try {
-    rclcpp::spin(std::make_shared<vesc_can_ros2_control::FakeVescNode>());
+    rclcpp::spin(std::make_shared<vesc_can::FakeVescNode>());
   } catch (const std::exception &error) {
     RCLCPP_ERROR(rclcpp::get_logger("fake_vesc"), "%s", error.what());
     exit_code = 1;

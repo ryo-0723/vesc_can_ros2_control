@@ -1,11 +1,12 @@
 # メッセージ対応と移行
 
 状態は [f1tenth の ROS 2 版 vesc_msgs](https://github.com/f1tenth/vesc/tree/153998df8545fe1781b975df88e411b4e71d4bfe/vesc_msgs)
-のパッケージを、このリポジトリの `vesc_msgs/` に同梱します。これはコミュニティの
+から状態用メッセージ 2 個を、このリポジトリの `vesc_msgs/` に同梱します。これはコミュニティの
 ROS パッケージで、VESC firmware の CAN パケットそのものとは別の定義です。
-上流の 4 種類の msg と元のメタデータを変更せずコピーし、上流の LICENSE を
-保存しています。ビルド設定には LICENSE と UPSTREAM.md をインストールする処理を
-追加しています。取り込み元と commit は [UPSTREAM.md](../vesc_msgs/UPSTREAM.md) に
+`VescState.msg` と `VescStateStamped.msg` の内容を変更せずコピーし、上流の BSD
+ライセンスを保存しています。CMake と package.xml は、この 2 個だけを生成する
+ローカルの最小構成です。LICENSE と UPSTREAM.md をインストールします。
+取り込み元と commit、各ファイルの SHA-256 は [UPSTREAM.md](../vesc_msgs/UPSTREAM.md) に
 記録しています。同名の `vesc_msgs` でも fork や revision により定義が異なるため、
 他の source copy は同じワークスペースへ追加しません。
 
@@ -16,17 +17,34 @@ ROS パッケージで、VESC firmware の CAN パケットそのものとは別
 | CAN 境界 | can_msgs/msg/Frame | 元の CAN ID、フラグ、DLC、ペイロードを保持 |
 | VESC 状態 | vesc_msgs/msg/VescStateStamped | モータごとのトピック、state.controller_id で CAN ID を識別 |
 | 関節状態・複数関節指令 | sensor_msgs/msg/JointState | 関節名、関節 rad / rad/s |
-| 単一関節指令 | std_msgs/msg/Float64 | 選択したモードに応じて関節 rad または rad/s |
+| 単一モータ指令 | std_msgs/msg/Float64 | 電流はモータ A（関節方向の符号）、位置は関節 rad、速度・電流＋速度は関節 rad/s |
 | 有効化・無効化 | std_srvs/srv/SetBool | 明示的な有効化と異常解除 |
 | 接続・鮮度・ドライバ異常 | diagnostic_msgs/msg/DiagnosticArray | モータごとの hardware_id と key/value |
 
 上流 `vesc_msgs` は状態用のパッケージです。指令・CAN フレーム・有効化サービスは
 それぞれの標準型を使います。VescImu/VescImuStamped はネイティブ STATUS に
-IMU データがないため、このドライバでは配信しません。
+IMU データがないため、ソースにも生成対象にも含めません。
+
+## コピーと vcs 取得の使い分け
+
+このリポジトリでは **必要な msg 2 個のコピー** を採用します。定義が小さく、
+上流ドライバを利用せず、IMU を除いた状態専用の構成を維持するためです。
+取得元 commit、内容のハッシュ、BSD ライセンス、上流の著者を記録します。
+更新は自動追従せず、定義の差分と統合テストを確認して取り込みます。
+
+[vcstool](https://github.com/dirk-thomas/vcstool#exporting-and-importing-sets-of-repositories)
+の `vcs import` で Git を取得する場合は、URL と version でリポジトリを指定します。
+上流一式を使う場合や、複数リポジトリの revision を一括管理する場合に適しています。
+今回の 2 個だけを使う構成に切り出すには、取得後の選別・ローカル変更が追加で必要です。
+`vcs` に切り替える場合は同梱 `vesc_msgs` を外し、commit を固定して取り込みます。
+
+この同梱版は上流 `vesc_msgs` 全体の代替ではありません。IMU を使う他のノードと
+同じワークスペースで利用する場合は、同梱版を外して完全な上流パッケージに揃えます。
+状態メッセージ 2 個は同じ定義なので、本ドライバの API はそのまま利用できます。
 
 ## VescState の対応範囲
 
-CAN レイアウトは [VESC firmware の送信処理](https://github.com/vedderb/bldc/blob/master/comm/comm_can.c)
+CAN レイアウトは [VESC firmware 6.06 の送信処理](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c)
 を基準にします。現在、通常モータ向けの周期状態 STATUS1〜6 をデコード・保存します。
 設定・BMS・GNSS・ファームウェア更新・問い合わせ応答の全パケットには対応していません。
 
@@ -61,10 +79,43 @@ fault_code=0 は実機の「故障なし」を意味するため、未取得値�
 unavailable_vesc_fields には常に未取得となる上流フィールドを列挙します。
 
 STATUS5 の公式形式は既知の 6 バイト + 予約 2 バイトの DLC=8 です。
-既存の DLC=6 も受け付けます。模擬 VESC と既知値テストは公式の 8 バイト形式を使い、
+全 STATUS を DLC=8 に統一し、以前の STATUS5 の DLC=6 互換受理は廃止しました。
+模擬 VESC と既知値テストも公式の 8 バイト形式を使い、
 予約領域が既知フィールドに影響しないことを確認します。
 
+## VESC firmware 6 の STATUS 形式
+
+参照は公式 `vedderb/bldc` の `release_6_06`、commit
+`94b305ec124b67b0161f2d3d85c4d5b35e48edc5` です。
+[comm_can.c](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c)
+の送信・受信処理と
+[datatypes.h](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/datatypes.h)
+の packet ID を照合しました。公式タグ `6.00` でも同じ STATUS1〜6 の形式を確認しています。
+VESC のハードウェア世代ではなく、firmware のネイティブ CAN 形式の参照です。
+
+全フレームは拡張 ID、DLC=8、big endian です。
+`i16` / `i32` は符号付き 16 / 32 bit の整数で、下表はペイロード先頭からの順です。
+
+| STATUS | packet ID | デコードする項目の順序 |
+|---|---|---|
+| 1 | 9 | ERPM (i32)、モータ電流 (i16 / 10 A)、duty (i16 / 1000) |
+| 2 | 14 | 消費電荷 (i32 / 10000 Ah)、回生電荷 (i32 / 10000 Ah) |
+| 3 | 15 | 消費電力量 (i32 / 10000 Wh)、回生電力量 (i32 / 10000 Wh) |
+| 4 | 16 | FET 温度 (i16 / 10 ℃)、モータ温度 (i16 / 10 ℃)、入力電流 (i16 / 10 A)、PID 角度 (i16 / 50 deg) |
+| 5 | 27 | タコメータ (i32 count)、入力電圧 (i16 / 10 V)、予約領域 (2 bytes、無視) |
+| 6 | 58 | ADC1 / ADC2 / ADC3 (各 i16 / 1000 V)、PPM (i16 / 1000) |
+
+`Status1`〜`Status6` の構造体、宣言、関数定義をこの順序に揃えています。
+標準 ID・RTR・エラーフレーム・異なる packet ID・DLC≠8 は false を返し、出力を更新しません。
+
 ## 旧独自 API からの移行
+
+パッケージ分割後の通常ノードと模擬 VESC は `vesc_can` にあります。
+起動は `ros2 launch vesc_can vesc_standalone.launch.py`、設定ファイルは
+`vesc_can/config/standalone.yaml` を使用します。既存のトピック設定を保つため、
+通常ノードの既定名は `vesc_can_ros2_control` のままです。
+hardware plugin 名は `vesc_can_ros2_control/VescSystem` を指定します。
+C++ の共通ヘッダは `vesc_can/...`、namespace は `vesc_can` へ移動しています。
 
 開発段階の独自 `vesc_can_interfaces` パッケージと SetPosition.srv は削除しました。
 旧型の publisher/subscriber は次の型・トピック・単位へ変更してください。

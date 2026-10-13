@@ -1,0 +1,44 @@
+/**/vesc_can_ros2_control:
+  ros__parameters:
+    can_tx_topic: /bench/can/tx
+    can_rx_topic: /bench/can/rx
+    update_period_ms: 10
+    state_publish_period_ms: 20
+    auto_enable_once: false
+    motors: [drive_joint, steer_joint, current_joint, hybrid_joint]
+    drive_joint:
+      controller_id: 11
+      control_mode: velocity
+      pole_pairs: 7.0
+      max_rpm: 190.0
+      rpm_slew_rate: 955.0
+      feedback_timeout_ms: 300
+      command_timeout_ms: 300
+    steer_joint:
+      controller_id: 21
+      control_mode: position
+      pole_pairs: 7.0
+      min_position: -1.0
+      max_position: 1.0
+      feedback_timeout_ms: 300
+      command_timeout_ms: 300
+    current_joint:
+      controller_id: 12
+      control_mode: current
+      pole_pairs: 7.0
+      direction: -1.0
+      max_current_a: 3.0
+      feedback_timeout_ms: 300
+      command_timeout_ms: 300
+    hybrid_joint:
+      controller_id: 31
+      control_mode: current_velocity
+      pole_pairs: 7.0
+      max_rpm: 190.0
+      rpm_slew_rate: 955.0
+      max_current_a: 3.0
+      startup_current_a: 2.0
+      rpm_control_threshold_rpm: 50.0
+      startup_timeout_ms: 1000
+      feedback_timeout_ms: 300
+      command_timeout_ms: 300

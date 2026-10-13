@@ -11,11 +11,11 @@
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/float64.hpp"
 #include "std_srvs/srv/set_bool.hpp"
-#include "vesc_can_ros2_control/can_transport.hpp"
-#include "vesc_can_ros2_control/vesc_telemetry.hpp"
+#include "vesc_can/can_transport.hpp"
+#include "vesc_can/vesc_state_conversion.hpp"
 #include "vesc_msgs/msg/vesc_state_stamped.hpp"
 
-namespace vesc_can_ros2_control
+namespace vesc_can
 {
 using VescStateStamped = vesc_msgs::msg::VescStateStamped;
 using Float64 = std_msgs::msg::Float64;
@@ -30,11 +30,11 @@ public:
   VescNode() : rclcpp::Node("vesc_can_ros2_control")
   {
     TransportOptions transport_options;
-    transport_options.tx_topic =
+    transport_options.can_tx_topic =
       declare_parameter<std::string>("can_tx_topic", "/socketcan_bridge/tx");
-    transport_options.rx_topic =
+    transport_options.can_rx_topic =
       declare_parameter<std::string>("can_rx_topic", "/socketcan_bridge/rx");
-    transport_options.period =
+    transport_options.send_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("update_period_ms", 20));
     const auto state_publish_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("state_publish_period_ms", 100));
@@ -75,27 +75,33 @@ private:
     }
     motor_config.controller_id = static_cast<std::uint8_t>(controller_id);
 
-    const auto command_interface =
-      declare_parameter<std::string>(parameter_prefix + "command_interface", "velocity");
-    if (command_interface == "position") {
-      motor_config.mode = ControlMode::Position;
-    } else if (command_interface != "velocity") {
-      throw std::invalid_argument(motor_name + ": unsupported mode");
-    }
+    const auto control_mode_name =
+      declare_parameter<std::string>(parameter_prefix + "control_mode", "");
+    const auto default_command_interface =
+      control_mode_name.empty()
+        ? std::string("velocity")
+        : std::string(command_interface_for_mode(control_mode_from_string(control_mode_name)));
+    const auto command_interface_name = declare_parameter<std::string>(
+      parameter_prefix + "command_interface", default_command_interface);
+    motor_config.control_mode = resolve_control_mode(control_mode_name, command_interface_name);
     motor_config.pole_pairs = declare_parameter<double>(parameter_prefix + "pole_pairs", 7.0);
     motor_config.gear_ratio = declare_parameter<double>(parameter_prefix + "gear_ratio", 1.0);
     motor_config.direction = declare_parameter<double>(parameter_prefix + "direction", 1.0);
     motor_config.zero_offset_rad =
       declare_parameter<double>(parameter_prefix + "zero_offset_rad", 0.0);
-    motor_config.min_position = declare_parameter<double>(parameter_prefix + "min_position", -kPi);
-    motor_config.max_position = declare_parameter<double>(parameter_prefix + "max_position", kPi);
+    motor_config.min_joint_position_rad =
+      declare_parameter<double>(parameter_prefix + "min_position", -kPi);
+    motor_config.max_joint_position_rad =
+      declare_parameter<double>(parameter_prefix + "max_position", kPi);
 
     const auto max_motor_rpm = declare_parameter<double>(parameter_prefix + "max_rpm", 5600.0);
     const auto motor_rpm_slew_rate =
       declare_parameter<double>(parameter_prefix + "rpm_slew_rate", 4000.0);
     const double motor_rpm_to_joint_rad_s = 2.0 * kPi / (60.0 * motor_config.gear_ratio);
-    motor_config.max_velocity = max_motor_rpm * motor_rpm_to_joint_rad_s;
-    motor_config.velocity_slew_rate = motor_rpm_slew_rate * motor_rpm_to_joint_rad_s;
+    motor_config.max_joint_velocity_rad_s = max_motor_rpm * motor_rpm_to_joint_rad_s;
+    motor_config.joint_velocity_slew_rate_rad_s2 = motor_rpm_slew_rate * motor_rpm_to_joint_rad_s;
+    motor_config.max_current_a =
+      declare_parameter<double>(parameter_prefix + "max_current_a", 10.0);
     motor_config.startup_current_a =
       declare_parameter<double>(parameter_prefix + "startup_current_a", 0.0);
     motor_config.rpm_control_threshold_rpm =
@@ -159,15 +165,21 @@ private:
       return;
     }
     for (std::size_t joint_index = 0; joint_index < joint_count; ++joint_index) {
-      const auto motor_config = std::find_if(motor_configs_.begin(), motor_configs_.end(),
-        [&](const MotorConfig &config) { return config.name == message.name[joint_index]; });
-      if (motor_config == motor_configs_.end()) {
+      const auto motor_config_it = std::find_if(
+        motor_configs_.begin(), motor_configs_.end(), [&](const MotorConfig &motor_config) {
+          return motor_config.name == message.name[joint_index];
+        });
+      if (motor_config_it == motor_configs_.end()) {
+        continue;
+      }
+      // JointState.effort is torque [Nm]; current [A] uses the per-motor Float64 topic.
+      if (motor_config_it->control_mode == ControlMode::Current) {
         continue;
       }
       const auto &command_values =
-        motor_config->mode == ControlMode::Position ? message.position : message.velocity;
+        uses_velocity_command(motor_config_it->control_mode) ? message.velocity : message.position;
       if (!command_values.empty()) {
-        const auto motor_index = static_cast<std::size_t>(motor_config - motor_configs_.begin());
+        const auto motor_index = static_cast<std::size_t>(motor_config_it - motor_configs_.begin());
         can_transport_->set_command(motor_index, command_values[joint_index]);
       }
     }
@@ -190,18 +202,18 @@ private:
     }
   }
 
-  static void add_diagnostic_value(
-    DiagnosticStatus &message, const std::string &name, const std::string &value)
+  static void add_diagnostic_value(DiagnosticStatus &message, const std::string &diagnostic_key,
+    const std::string &diagnostic_value)
   {
     diagnostic_msgs::msg::KeyValue field;
-    field.key = name;
-    field.value = value;
+    field.key = diagnostic_key;
+    field.value = diagnostic_value;
     message.values.push_back(field);
   }
 
   DiagnosticStatus make_diagnostic_status(const MotorConfig &motor_config,
-    const MotorState &motor_state, TimePoint now, bool feedback_ready, bool enabled, bool faulted,
-    const std::string &fault_reason) const
+    const MotorState &motor_state, TimePoint current_time, bool feedback_ready, bool enabled,
+    bool faulted, const std::string &fault_reason) const
   {
     DiagnosticStatus message;
     message.name = std::string(get_namespace()) + "/vesc/" + motor_config.name;
@@ -220,23 +232,25 @@ private:
       message.message = "Disabled";
     }
     const auto timeout = motor_config.feedback_timeout;
-    const auto add_freshness = [&](const std::string &name, bool received, TimePoint received_at) {
-      const bool fresh = feedback_is_fresh(received, received_at, now, timeout);
-      add_diagnostic_value(message, name, fresh ? "true" : "false");
+    const auto add_freshness = [&](const std::string &diagnostic_key, bool has_feedback,
+                                 TimePoint received_at) {
+      const bool feedback_fresh =
+        feedback_is_fresh(has_feedback, received_at, current_time, timeout);
+      add_diagnostic_value(message, diagnostic_key, feedback_fresh ? "true" : "false");
     };
-    add_freshness("status_1_fresh", motor_state.have_status1, motor_state.status1_time);
-    add_freshness("status_2_fresh", motor_state.have_status2, motor_state.status2_time);
-    add_freshness("status_3_fresh", motor_state.have_status3, motor_state.status3_time);
-    add_freshness("status_4_fresh", motor_state.have_status4, motor_state.status4_time);
-    add_freshness("status_5_fresh", motor_state.have_status5, motor_state.status5_time);
-    add_freshness("status_6_fresh", motor_state.have_status6, motor_state.status6_time);
+    add_freshness("status_1_fresh", motor_state.has_status_1, motor_state.status_1_received_at);
+    add_freshness("status_2_fresh", motor_state.has_status_2, motor_state.status_2_received_at);
+    add_freshness("status_3_fresh", motor_state.has_status_3, motor_state.status_3_received_at);
+    add_freshness("status_4_fresh", motor_state.has_status_4, motor_state.status_4_received_at);
+    add_freshness("status_5_fresh", motor_state.has_status_5, motor_state.status_5_received_at);
+    add_freshness("status_6_fresh", motor_state.has_status_6, motor_state.status_6_received_at);
     add_diagnostic_value(message, "enabled", enabled ? "true" : "false");
     add_diagnostic_value(message, "driver_faulted", faulted ? "true" : "false");
     add_diagnostic_value(message, "unavailable_vesc_fields",
       "avg_id,avg_iq,ntc_temp_mos1,ntc_temp_mos2,ntc_temp_mos3,avg_vd,avg_vq,"
       "distance_traveled,fault_code");
-    const bool status_6_fresh =
-      feedback_is_fresh(motor_state.have_status6, motor_state.status6_time, now, timeout);
+    const bool status_6_fresh = feedback_is_fresh(
+      motor_state.has_status_6, motor_state.status_6_received_at, current_time, timeout);
     add_diagnostic_value(
       message, "adc_1_v", std::to_string(status_6_fresh ? motor_state.adc_1_v : kUnknownValue));
     add_diagnostic_value(
@@ -272,14 +286,15 @@ private:
       vesc_state.state = make_vesc_state(motor_config, motor_state, current_time);
       motor_state_publishers_[motor_index]->publish(vesc_state);
       const bool position_fresh =
-        motor_config.mode == ControlMode::Position
+        motor_config.control_mode == ControlMode::Position
           ? feedback_ready
-          : feedback_is_fresh(motor_state.have_status5, motor_state.status5_time, current_time,
-              motor_config.feedback_timeout);
+          : feedback_is_fresh(motor_state.has_status_5, motor_state.status_5_received_at,
+              current_time, motor_config.feedback_timeout);
       joint_states.name.push_back(motor_config.name);
       joint_states.position.push_back(
-        feedback_ready && position_fresh ? motor_state.position : kUnknownValue);
-      joint_states.velocity.push_back(feedback_ready ? motor_state.velocity : kUnknownValue);
+        feedback_ready && position_fresh ? motor_state.joint_position_rad : kUnknownValue);
+      joint_states.velocity.push_back(
+        feedback_ready ? motor_state.joint_velocity_rad_s : kUnknownValue);
       diagnostics.status.push_back(make_diagnostic_status(
         motor_config, motor_state, current_time, feedback_ready, enabled, faulted, fault_reason));
     }
@@ -298,14 +313,14 @@ private:
   rclcpp::Publisher<DiagnosticArray>::SharedPtr diagnostic_publisher_;
   rclcpp::TimerBase::SharedPtr state_publish_timer_;
 };
-}  // namespace vesc_can_ros2_control
+}  // namespace vesc_can
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   int exit_code = 0;
   try {
-    auto node = std::make_shared<vesc_can_ros2_control::VescNode>();
+    auto node = std::make_shared<vesc_can::VescNode>();
     rclcpp::spin(node);
     node->stop();
   } catch (const std::exception &error) {

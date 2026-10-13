@@ -21,9 +21,13 @@ def create_control_nodes(context):
     can_topic_parameters = {
         key: LaunchConfiguration(key).perform(context) for key in ("can_tx_topic", "can_rx_topic")
     }
+    can_topic_parameters["controller_ids"] = [
+        int(joint.findtext("./param[@name='controller_id']"))
+        for joint in robot_description_tree.findall("./ros2_control/joint")
+    ]
     return [
         Node(
-            package="vesc_can_ros2_control",
+            package="vesc_can",
             executable="fake_vesc_node",
             name="fake_control_vesc",
             parameters=[can_topic_parameters],
@@ -44,9 +48,7 @@ def create_control_nodes(context):
             package="controller_manager",
             executable="spawner",
             arguments=[
-                "joint_state_broadcaster",
-                "drive_controller",
-                "steer_controller",
+                *LaunchConfiguration("controllers").perform(context).split(),
                 "--activate-as-group",
                 "--controller-manager-timeout",
                 "20",
@@ -65,6 +67,10 @@ def generate_launch_description():
             DeclareLaunchArgument("use_mock", default_value="false"),
             DeclareLaunchArgument("can_tx_topic", default_value="/can/tx"),
             DeclareLaunchArgument("can_rx_topic", default_value="/can/rx"),
+            DeclareLaunchArgument(
+                "controllers",
+                default_value="joint_state_broadcaster drive_controller steer_controller",
+            ),
             DeclareLaunchArgument(
                 "urdf", default_value=str(package_share_dir / "urdf/vesc_example.urdf")
             ),
