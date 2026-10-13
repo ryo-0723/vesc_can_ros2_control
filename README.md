@@ -10,7 +10,7 @@ have different hardware APIs and have not been validated. The C++ library explic
 requires C++20, matching the Lyrical dependencies. This is a development
 package; no ROS apt release or physical-hardware validation is claimed.
 
-Local validation (2026-10-13): Lyrical build and all 35 test cases passed with
+Local validation (2026-10-14): Lyrical build and all 37 test cases passed with
 `rmw_fastrtps_cpp`, including standalone and ros2_control integration tests.
 Installed codec usage and a `BUILD_TESTING=OFF` build also passed.
 See the [validation report](docs/validation.md). The physical CAN bus

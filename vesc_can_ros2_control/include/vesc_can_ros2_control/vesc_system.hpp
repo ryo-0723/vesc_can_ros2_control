@@ -15,7 +15,7 @@ class VescSystem : public hardware_interface::SystemInterface
 {
 public:
   hardware_interface::CallbackReturn on_init(
-    const hardware_interface::HardwareComponentInterfaceParams &parameters) override;
+    const hardware_interface::HardwareComponentInterfaceParams &params) override;
   hardware_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State &) override;
   hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State &) override;
   hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override;
@@ -38,7 +38,7 @@ private:
   };
   struct StateHandle
   {
-    std::size_t motor_index{};
+    std::size_t motor_idx{};
     StateField field{};
     hardware_interface::StateInterface::SharedPtr handle;
   };
@@ -47,17 +47,16 @@ private:
     const hardware_interface::ComponentInfo &joint);
   void cache_interface_handles();
   void release_can_transport();
-  double read_state_value(
-    const StateHandle &state_handle, vesc_can_driver::TimePoint current_time) const;
+  double read_state_value(const StateHandle &binding, vesc_can_driver::TimePoint steady_now) const;
 
-  std::vector<vesc_can_driver::MotorConfig> motor_configs_;
-  std::vector<vesc_can_driver::MotorState> motor_states_;
-  std::vector<double> motor_commands_;
-  std::vector<hardware_interface::CommandInterface::SharedPtr> command_handles_;
+  std::vector<vesc_can_driver::MotorConfig> configs_;
+  std::vector<vesc_can_driver::MotorState> states_;
+  std::vector<double> cmds_;
+  std::vector<hardware_interface::CommandInterface::SharedPtr> cmd_handles_;
   std::vector<StateHandle> state_handles_;
-  vesc_can_driver::TransportOptions transport_options_;
+  vesc_can_driver::TransportOptions opts_;
   std::chrono::milliseconds activation_timeout_{2000};
-  std::unique_ptr<vesc_can_driver::CanTransport> can_transport_;
+  std::unique_ptr<vesc_can_driver::CanTransport> transport_;
   bool active_{false};
 };
 }  // namespace vesc_can_ros2_control

@@ -23,91 +23,87 @@ can_msgs::msg::Frame status_frame(
 
 MotorConfig state_conversion_config()
 {
-  MotorConfig motor_config;
-  motor_config.name = "drive_joint";
-  motor_config.controller_id = 11;
-  motor_config.gear_ratio = 2.0;
-  motor_config.direction = -1.0;
-  motor_config.feedback_timeout = 200ms;
-  return motor_config;
+  MotorConfig cfg;
+  cfg.name = "drive_joint";
+  cfg.controller_id = 11;
+  cfg.gear_ratio = 2.0;
+  cfg.direction = -1.0;
+  cfg.feedback_timeout = 200ms;
+  return cfg;
 }
 
-void receive_all_statuses(DriverCore &driver_core, TimePoint received_at)
+void receive_all_statuses(DriverCore &core, TimePoint received_at)
 {
   // Known native wire values, independent of the fake node's encoder.
-  ASSERT_TRUE(driver_core.receive(status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244}), received_at));
-  ASSERT_TRUE(driver_core.receive(status_frame(14, {0, 0, 48, 212, 0, 0, 19, 136}), received_at));
-  ASSERT_TRUE(driver_core.receive(status_frame(15, {0, 1, 212, 192, 0, 0, 39, 16}), received_at));
-  ASSERT_TRUE(driver_core.receive(status_frame(16, {1, 44, 1, 54, 0, 12, 17, 148}), received_at));
-  ASSERT_TRUE(
-    driver_core.receive(status_frame(27, {255, 255, 255, 214, 0, 240, 0, 0}), received_at));
-  ASSERT_TRUE(
-    driver_core.receive(status_frame(58, {4, 76, 8, 152, 12, 228, 254, 12}), received_at));
+  ASSERT_TRUE(core.receive(status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244}), received_at));
+  ASSERT_TRUE(core.receive(status_frame(14, {0, 0, 48, 212, 0, 0, 19, 136}), received_at));
+  ASSERT_TRUE(core.receive(status_frame(15, {0, 1, 212, 192, 0, 0, 39, 16}), received_at));
+  ASSERT_TRUE(core.receive(status_frame(16, {1, 44, 1, 54, 0, 12, 17, 148}), received_at));
+  ASSERT_TRUE(core.receive(status_frame(27, {255, 255, 255, 214, 0, 240, 0, 0}), received_at));
+  ASSERT_TRUE(core.receive(status_frame(58, {4, 76, 8, 152, 12, 228, 254, 12}), received_at));
 }
 
 TEST(StateConversion, NativeValuesKeepUpstreamUnitsAndControllerIdentity)
 {
-  const auto motor_config = state_conversion_config();
-  DriverCore driver_core({motor_config});
+  const auto cfg = state_conversion_config();
+  DriverCore core({cfg});
   const auto received_at = TimePoint(1s);
-  receive_all_statuses(driver_core, received_at);
-  const auto &motor_state = driver_core.states().front();
-  const auto message = make_vesc_state(motor_config, motor_state, received_at);
-  EXPECT_EQ(message.controller_id, 11);
-  EXPECT_DOUBLE_EQ(message.speed, 420.0);  // Raw ERPM, despite reversed gearing.
-  EXPECT_NEAR(motor_state.joint_velocity_rad_s, -kPi, 1e-9);
-  EXPECT_DOUBLE_EQ(message.current_motor, 1.5);
-  EXPECT_DOUBLE_EQ(message.duty_cycle, 0.5);
-  EXPECT_DOUBLE_EQ(message.current_input, 1.2);
-  EXPECT_DOUBLE_EQ(message.temp_fet, 30.0);
-  EXPECT_DOUBLE_EQ(message.temp_motor, 31.0);
-  EXPECT_DOUBLE_EQ(message.pid_pos_now, 90.0);  // Native motor PID angle in degrees.
-  EXPECT_DOUBLE_EQ(message.voltage_input, 24.0);
-  EXPECT_EQ(message.displacement, -42);
-  EXPECT_DOUBLE_EQ(message.charge_drawn, 1.25);
-  EXPECT_DOUBLE_EQ(message.charge_regen, 0.5);
-  EXPECT_DOUBLE_EQ(message.energy_drawn, 12.0);
-  EXPECT_DOUBLE_EQ(message.energy_regen, 1.0);
-  EXPECT_DOUBLE_EQ(motor_state.adc_1_v, 1.1);
-  EXPECT_DOUBLE_EQ(motor_state.ppm, -0.5);
+  receive_all_statuses(core, received_at);
+  const auto &state = core.states().front();
+  const auto msg = make_vesc_state(cfg, state, received_at);
+  EXPECT_EQ(msg.controller_id, 11);
+  EXPECT_DOUBLE_EQ(msg.speed, 420.0);  // Raw ERPM, despite reversed gearing.
+  EXPECT_NEAR(state.vel_rad_s, -kPi, 1e-9);
+  EXPECT_DOUBLE_EQ(msg.current_motor, 1.5);
+  EXPECT_DOUBLE_EQ(msg.duty_cycle, 0.5);
+  EXPECT_DOUBLE_EQ(msg.current_input, 1.2);
+  EXPECT_DOUBLE_EQ(msg.temp_fet, 30.0);
+  EXPECT_DOUBLE_EQ(msg.temp_motor, 31.0);
+  EXPECT_DOUBLE_EQ(msg.pid_pos_now, 90.0);  // Native motor PID angle in degrees.
+  EXPECT_DOUBLE_EQ(msg.voltage_input, 24.0);
+  EXPECT_EQ(msg.displacement, -42);
+  EXPECT_DOUBLE_EQ(msg.charge_drawn, 1.25);
+  EXPECT_DOUBLE_EQ(msg.charge_regen, 0.5);
+  EXPECT_DOUBLE_EQ(msg.energy_drawn, 12.0);
+  EXPECT_DOUBLE_EQ(msg.energy_regen, 1.0);
+  EXPECT_DOUBLE_EQ(state.adc_1_v, 1.1);
+  EXPECT_DOUBLE_EQ(state.ppm, -0.5);
 }
 
 TEST(StateConversion, MissingValuesAndDeviceFaultAreNeverReportedAsHealthyZeros)
 {
-  const auto motor_config = state_conversion_config();
-  const auto message = make_vesc_state(motor_config, MotorState{}, TimePoint(1s));
-  const std::array unavailable_values = {message.speed, message.current_motor,
-    message.current_input, message.temp_fet, message.temp_motor, message.duty_cycle,
-    message.voltage_input, message.charge_drawn, message.charge_regen, message.energy_drawn,
-    message.energy_regen, message.pid_pos_now, message.avg_id, message.avg_iq,
-    message.ntc_temp_mos1, message.ntc_temp_mos2, message.ntc_temp_mos3, message.avg_vd,
-    message.avg_vq};
+  const auto cfg = state_conversion_config();
+  const auto msg = make_vesc_state(cfg, MotorState{}, TimePoint(1s));
+  const std::array unavailable_values = {msg.speed, msg.current_motor, msg.current_input,
+    msg.temp_fet, msg.temp_motor, msg.duty_cycle, msg.voltage_input, msg.charge_drawn,
+    msg.charge_regen, msg.energy_drawn, msg.energy_regen, msg.pid_pos_now, msg.avg_id, msg.avg_iq,
+    msg.ntc_temp_mos1, msg.ntc_temp_mos2, msg.ntc_temp_mos3, msg.avg_vd, msg.avg_vq};
   for (double value : unavailable_values) {
     EXPECT_TRUE(std::isnan(value));
   }
-  EXPECT_EQ(message.fault_code, kUnavailableVescInteger);
-  EXPECT_NE(message.fault_code, vesc_msgs::msg::VescState::FAULT_CODE_NONE);
-  EXPECT_EQ(message.distance_traveled, kUnavailableVescInteger);
+  EXPECT_EQ(msg.fault_code, kUnavailableVescInteger);
+  EXPECT_NE(msg.fault_code, vesc_msgs::msg::VescState::FAULT_CODE_NONE);
+  EXPECT_EQ(msg.distance_traveled, kUnavailableVescInteger);
 }
 
 TEST(StateConversion, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForControl)
 {
-  const auto motor_config = state_conversion_config();
-  DriverCore driver_core({motor_config});
+  const auto cfg = state_conversion_config();
+  DriverCore core({cfg});
   const auto received_at = TimePoint(1s);
   const auto rpm_frame = status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244});
-  ASSERT_TRUE(driver_core.receive(rpm_frame, received_at));
-  EXPECT_TRUE(driver_core.ready(received_at));  // STATUS2/3/6 are optional telemetry.
-  receive_all_statuses(driver_core, received_at);
-  const auto current_time = received_at + 201ms;
-  ASSERT_TRUE(driver_core.receive(rpm_frame, current_time));
-  const auto message = make_vesc_state(motor_config, driver_core.states().front(), current_time);
-  EXPECT_DOUBLE_EQ(message.speed, 420.0);
-  EXPECT_TRUE(std::isnan(message.temp_fet));
-  EXPECT_TRUE(std::isnan(message.voltage_input));
-  EXPECT_TRUE(std::isnan(message.charge_drawn));
-  EXPECT_TRUE(std::isnan(message.energy_drawn));
-  EXPECT_EQ(message.displacement, -42);  // Last count; status_5_fresh becomes false.
+  ASSERT_TRUE(core.receive(rpm_frame, received_at));
+  EXPECT_TRUE(core.ready(received_at));  // STATUS2/3/6 are optional telemetry.
+  receive_all_statuses(core, received_at);
+  const auto steady_now = received_at + 201ms;
+  ASSERT_TRUE(core.receive(rpm_frame, steady_now));
+  const auto msg = make_vesc_state(cfg, core.states().front(), steady_now);
+  EXPECT_DOUBLE_EQ(msg.speed, 420.0);
+  EXPECT_TRUE(std::isnan(msg.temp_fet));
+  EXPECT_TRUE(std::isnan(msg.voltage_input));
+  EXPECT_TRUE(std::isnan(msg.charge_drawn));
+  EXPECT_TRUE(std::isnan(msg.energy_drawn));
+  EXPECT_EQ(msg.displacement, -42);  // Last count; status_5_fresh becomes false.
 }
 }  // namespace
 }  // namespace vesc_can_driver

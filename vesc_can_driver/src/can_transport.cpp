@@ -6,33 +6,32 @@
 
 namespace vesc_can_driver
 {
-CanTransport::CanTransport(std::vector<MotorConfig> motor_configs,
-  TransportOptions transport_options, rclcpp::Node::SharedPtr can_node)
-  : driver_core_(std::move(motor_configs)), transport_options_(std::move(transport_options)),
-    can_node_(std::move(can_node)), pending_commands_(driver_core_.motor_configs().size())
+CanTransport::CanTransport(std::vector<MotorConfig> configs,
+  TransportOptions opts, rclcpp::Node::SharedPtr can_node)
+  : core_(std::move(configs))
+  , opts_(std::move(opts))
+  , can_node_(std::move(can_node))
+  , pending_cmds_(core_.motor_configs().size())
 {
-  if (!can_node_ || transport_options_.send_period.count() <= 0 ||
-      transport_options_.can_tx_topic.empty() || transport_options_.can_rx_topic.empty() ||
-      transport_options_.can_tx_topic == transport_options_.can_rx_topic) {
+  if (!can_node_ || opts_.send_period.count() <= 0 || opts_.tx_topic.empty() ||
+      opts_.rx_topic.empty() || opts_.tx_topic == opts_.rx_topic) {
     throw std::invalid_argument("Invalid CAN transport node, topics or period");
   }
-  command_frames_.reserve(driver_core_.motor_configs().size());
-  const auto tx_queue_depth = std::max<std::size_t>(50, driver_core_.motor_configs().size() * 4);
-  const auto tx_qos = rclcpp::QoS(tx_queue_depth).reliable().durability_volatile();
-  can_tx_publisher_ =
-    can_node_->create_publisher<can_msgs::msg::Frame>(transport_options_.can_tx_topic, tx_qos);
-  can_rx_subscription_ =
-    can_node_->create_subscription<can_msgs::msg::Frame>(transport_options_.can_rx_topic,
-      rclcpp::SensorDataQoS().keep_last(512), [this](can_msgs::msg::Frame::ConstSharedPtr frame) {
-        {
-          std::lock_guard<std::mutex> state_lock(state_mutex_);
-          driver_core_.receive(*frame, SteadyClock::now());
-        }
-        feedback_changed_.notify_all();
-      });
-  send_timer_ =
-    can_node_->create_wall_timer(transport_options_.send_period, [this]() { send_commands(); });
-  can_executor_.add_node(can_node_);
+
+  cmd_frames_.reserve(core_.motor_configs().size());
+  const auto tx_depth = std::max<std::size_t>(50, core_.motor_configs().size() * 4);
+  const auto tx_qos = rclcpp::QoS(tx_depth).reliable().durability_volatile();
+  tx_pub_ = can_node_->create_publisher<can_msgs::msg::Frame>(opts_.tx_topic, tx_qos);
+  rx_sub_ = can_node_->create_subscription<can_msgs::msg::Frame>(opts_.rx_topic,
+    rclcpp::SensorDataQoS().keep_last(512), [this](can_msgs::msg::Frame::ConstSharedPtr frame) {
+      {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        core_.receive(*frame, SteadyClock::now());
+      }
+      feedback_cv_.notify_all();
+    });
+  send_timer_ = can_node_->create_wall_timer(opts_.send_period, [this]() { send_commands(); });
+  can_exec_.add_node(can_node_);
 }
 
 CanTransport::~CanTransport()
@@ -45,12 +44,12 @@ void CanTransport::start()
   if (shutdown_started_.load()) {
     throw std::logic_error("Transport has been shut down");
   }
-  if (executor_thread_.joinable()) {
+  if (exec_thread_.joinable()) {
     throw std::logic_error("Transport already started");
   }
-  executor_thread_ = std::thread([this]() {
+  exec_thread_ = std::thread([this]() {
     try {
-      can_executor_.spin();
+      can_exec_.spin();
     } catch (const std::exception &error) {
       enabled_.store(false);
       faulted_.store(true);
@@ -67,31 +66,31 @@ void CanTransport::shutdown() noexcept
   }
   stop_requested_.store(true);
   enabled_.store(false);
-  can_executor_.cancel();
-  if (executor_thread_.joinable()) {
-    executor_thread_.join();
+  can_exec_.cancel();
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
   }
   try {
     if (rclcpp::ok(can_node_->get_node_base_interface()->get_context())) {
       std::vector<can_msgs::msg::Frame> stop_frames;
-      stop_frames.reserve(driver_core_.motor_configs().size());
-      driver_core_.stop_frames(stop_frames);
+      stop_frames.reserve(core_.motor_configs().size());
+      core_.stop_frames(stop_frames);
       for (auto &frame : stop_frames) {
         frame.header.stamp = can_node_->now();
-        can_tx_publisher_->publish(frame);
+        tx_pub_->publish(frame);
       }
     }
   } catch (const std::exception &) {
     // Destruction cannot guarantee network delivery; MCU/VESC watchdogs remain necessary.
   }
-  feedback_changed_.notify_all();
+  feedback_cv_.notify_all();
 }
 
 bool CanTransport::wait_ready(std::chrono::milliseconds timeout)
 {
   std::unique_lock<std::mutex> state_lock(state_mutex_);
-  const bool condition_met = feedback_changed_.wait_for(state_lock, timeout,
-    [this]() { return shutdown_started_.load() || driver_core_.ready(SteadyClock::now()); });
+  const bool condition_met = feedback_cv_.wait_for(state_lock, timeout,
+    [this]() { return shutdown_started_.load() || core_.ready(SteadyClock::now()); });
   return condition_met && !shutdown_started_.load();
 }
 
@@ -101,13 +100,13 @@ bool CanTransport::enable()
     return false;
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  std::fill(pending_commands_.begin(), pending_commands_.end(), PendingCommand{});
-  const bool enabled_successfully = driver_core_.enable(SteadyClock::now());
+  std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+  const bool enabled = core_.enable(SteadyClock::now());
   fault_requested_.store(false);
-  enabled_.store(enabled_successfully);
-  faulted_.store(driver_core_.faulted());
-  stop_requested_.store(!enabled_successfully);
-  return enabled_successfully;
+  enabled_.store(enabled);
+  faulted_.store(core_.faulted());
+  stop_requested_.store(!enabled);
+  return enabled;
 }
 
 void CanTransport::disable()
@@ -115,18 +114,17 @@ void CanTransport::disable()
   stop_requested_.store(true);
   enabled_.store(false);
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  driver_core_.disable();
-  std::fill(pending_commands_.begin(), pending_commands_.end(), PendingCommand{});
+  core_.disable();
+  std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
 }
 
-bool CanTransport::try_set_commands(const std::vector<double> &command_values)
+bool CanTransport::try_set_commands(const std::vector<double> &values)
 {
-  if (command_values.size() != pending_commands_.size() || !enabled_.load() ||
-      stop_requested_.load()) {
+  if (values.size() != pending_cmds_.size() || !enabled_.load() || stop_requested_.load()) {
     return false;
   }
-  for (std::size_t motor_index = 0; motor_index < command_values.size(); ++motor_index) {
-    if (!command_is_valid(driver_core_.motor_configs()[motor_index], command_values[motor_index])) {
+  for (std::size_t motor_idx = 0; motor_idx < values.size(); ++motor_idx) {
+    if (!command_is_valid(core_.motor_configs()[motor_idx], values[motor_idx])) {
       request_stop();
       return false;
     }
@@ -136,49 +134,49 @@ bool CanTransport::try_set_commands(const std::vector<double> &command_values)
     return false;
   }
   const auto received_at = SteadyClock::now();
-  for (std::size_t motor_index = 0; motor_index < command_values.size(); ++motor_index) {
-    pending_commands_[motor_index] = {command_values[motor_index], received_at, true};
+  for (std::size_t motor_idx = 0; motor_idx < values.size(); ++motor_idx) {
+    pending_cmds_[motor_idx] = {values[motor_idx], received_at, true};
   }
   return true;
 }
 
-bool CanTransport::set_command(std::size_t motor_index, double command_value)
+bool CanTransport::set_command(std::size_t motor_idx, double value)
 {
-  if (motor_index >= pending_commands_.size() || !enabled_.load() || stop_requested_.load()) {
+  if (motor_idx >= pending_cmds_.size() || !enabled_.load() || stop_requested_.load()) {
     return false;
   }
-  if (!command_is_valid(driver_core_.motor_configs()[motor_index], command_value)) {
+  if (!command_is_valid(core_.motor_configs()[motor_idx], value)) {
     request_stop();
     return false;
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  pending_commands_[motor_index] = {command_value, SteadyClock::now(), true};
+  pending_cmds_[motor_idx] = {value, SteadyClock::now(), true};
   return true;
 }
 
-bool CanTransport::try_snapshot(std::vector<MotorState> &motor_states)
+bool CanTransport::try_snapshot(std::vector<MotorState> &states)
 {
-  if (motor_states.size() != driver_core_.motor_configs().size()) {
+  if (states.size() != core_.motor_configs().size()) {
     return false;
   }
   std::unique_lock<std::mutex> state_lock(state_mutex_, std::try_to_lock);
   if (!state_lock.owns_lock()) {
     return false;
   }
-  std::copy(driver_core_.states().begin(), driver_core_.states().end(), motor_states.begin());
+  std::copy(core_.states().begin(), core_.states().end(), states.begin());
   return true;
 }
 
 std::vector<MotorState> CanTransport::snapshot()
 {
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  return driver_core_.states();
+  return core_.states();
 }
 
 std::string CanTransport::fault_reason()
 {
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  return driver_core_.fault_reason();
+  return core_.fault_reason();
 }
 
 void CanTransport::send_commands()
@@ -187,31 +185,31 @@ void CanTransport::send_commands()
     std::lock_guard<std::mutex> state_lock(state_mutex_);
     if (stop_requested_.load()) {
       if (fault_requested_.exchange(false)) {
-        driver_core_.stop_on_error("Stop requested by hardware/topic command validation");
+        core_.stop_on_error("Stop requested by hardware/topic command validation");
       }
-      driver_core_.disable();
-      std::fill(pending_commands_.begin(), pending_commands_.end(), PendingCommand{});
+      core_.disable();
+      std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
     } else {
-      for (std::size_t motor_index = 0; motor_index < pending_commands_.size(); ++motor_index) {
-        if (pending_commands_[motor_index].has_pending_update) {
-          driver_core_.set_command(motor_index, pending_commands_[motor_index].command_value,
-            pending_commands_[motor_index].received_at);
-          pending_commands_[motor_index].has_pending_update = false;
+      for (std::size_t motor_idx = 0; motor_idx < pending_cmds_.size(); ++motor_idx) {
+        if (pending_cmds_[motor_idx].updated) {
+          core_.set_command(
+            motor_idx, pending_cmds_[motor_idx].value, pending_cmds_[motor_idx].received_at);
+          pending_cmds_[motor_idx].updated = false;
         }
       }
     }
-    driver_core_.command_frames(SteadyClock::now(), command_frames_);
-    enabled_.store(driver_core_.enabled());
-    faulted_.store(driver_core_.faulted());
+    core_.command_frames(SteadyClock::now(), cmd_frames_);
+    enabled_.store(core_.enabled());
+    faulted_.store(core_.faulted());
   }
-  for (auto &frame : command_frames_) {
+  for (auto &frame : cmd_frames_) {
     // A concurrent disable must not leave a previously prepared motion command in flight.
     if (stop_requested_.load()) {
       frame = protocol::make_set_current_frame(
         static_cast<std::uint8_t>(frame.id & protocol::kControllerIdMask), 0.0);
     }
     frame.header.stamp = can_node_->now();
-    can_tx_publisher_->publish(frame);
+    tx_pub_->publish(frame);
   }
 }
 }  // namespace vesc_can_driver

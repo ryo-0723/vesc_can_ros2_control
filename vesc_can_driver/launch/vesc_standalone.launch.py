@@ -8,13 +8,11 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    package_share_dir = Path(get_package_share_directory("vesc_can_driver"))
+    pkg_dir = Path(get_package_share_directory("vesc_can_driver"))
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_mock", default_value="false"),
-            DeclareLaunchArgument(
-                "config", default_value=str(package_share_dir / "config/standalone.yaml")
-            ),
+            DeclareLaunchArgument("config", default_value=str(pkg_dir / "config/standalone.yaml")),
             Node(
                 package="vesc_can_driver",
                 executable="fake_vesc_node",

@@ -12,5 +12,5 @@ constexpr std::int32_t kUnavailableVescInteger = -1;
 // Floating fields expire independently. Integer displacement keeps its last received
 // count; consumers must check status_5_fresh in the accompanying diagnostics.
 vesc_msgs::msg::VescState make_vesc_state(
-  const MotorConfig &motor_config, const MotorState &motor_state, TimePoint current_time);
+  const MotorConfig &cfg, const MotorState &state, TimePoint now);
 }  // namespace vesc_can_driver

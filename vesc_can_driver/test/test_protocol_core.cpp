@@ -14,12 +14,12 @@ namespace
 using namespace std::chrono_literals;
 MotorConfig make_motor_config(std::uint8_t controller_id = 11)
 {
-  MotorConfig motor_config;
-  motor_config.name = "motor" + std::to_string(controller_id);
-  motor_config.controller_id = controller_id;
-  motor_config.command_timeout = 100ms;
-  motor_config.feedback_timeout = 200ms;
-  return motor_config;
+  MotorConfig cfg;
+  cfg.name = "motor" + std::to_string(controller_id);
+  cfg.controller_id = controller_id;
+  cfg.command_timeout = 100ms;
+  cfg.feedback_timeout = 200ms;
+  return cfg;
 }
 can_msgs::msg::Frame make_status_1_frame(std::uint8_t controller_id = 11)
 {
@@ -260,83 +260,83 @@ TEST(Protocol, Vesc6Signed16StatusFieldsKeepTheirOrderAndScale)
 
 TEST(Core, ConvertsJointUnitsAndUsesMeasuredTachometer)
 {
-  auto motor_config = make_motor_config();
-  motor_config.gear_ratio = 2.0;
-  motor_config.direction = -1.0;
-  EXPECT_NEAR(joint_velocity_to_erpm(motor_config, kPi), -420.0, 1e-9);
-  DriverCore driver_core({motor_config});
+  auto cfg = make_motor_config();
+  cfg.gear_ratio = 2.0;
+  cfg.direction = -1.0;
+  EXPECT_NEAR(vel_to_erpm(cfg, kPi), -420.0, 1e-9);
+  DriverCore core({cfg});
   const auto start_time = TimePoint(1s);
-  EXPECT_FALSE(driver_core.enable(start_time));
-  ASSERT_TRUE(driver_core.receive(make_status_1_frame(), start_time));
-  EXPECT_NEAR(driver_core.states()[0].joint_velocity_rad_s, -kPi, 1e-9);
-  ASSERT_TRUE(driver_core.receive(make_status_5_frame(), start_time));
-  EXPECT_NEAR(driver_core.states()[0].joint_position_rad, kPi, 1e-9);
-  EXPECT_FALSE(driver_core.receive(make_status_1_frame(99), start_time));
-  motor_config.control_mode = ControlMode::Position;
-  motor_config.zero_offset_rad = kPi / 2;
-  EXPECT_NEAR(joint_position_to_degrees(motor_config, kPi / 4), 0.0, 1e-9);
-  EXPECT_NEAR(degrees_to_joint_position(motor_config, 0.0), kPi / 4, 1e-9);
+  EXPECT_FALSE(core.enable(start_time));
+  ASSERT_TRUE(core.receive(make_status_1_frame(), start_time));
+  EXPECT_NEAR(core.states()[0].vel_rad_s, -kPi, 1e-9);
+  ASSERT_TRUE(core.receive(make_status_5_frame(), start_time));
+  EXPECT_NEAR(core.states()[0].pos_rad, kPi, 1e-9);
+  EXPECT_FALSE(core.receive(make_status_1_frame(99), start_time));
+  cfg.mode = ControlMode::Position;
+  cfg.zero_offset_rad = kPi / 2;
+  EXPECT_NEAR(pos_to_deg(cfg, kPi / 4), 0.0, 1e-9);
+  EXPECT_NEAR(deg_to_pos(cfg, 0.0), kPi / 4, 1e-9);
 }
 TEST(Core, MultiMotorFeedbackAndCommandTimeoutLatchStopUntilExplicitEnable)
 {
-  DriverCore driver_core({make_motor_config(11), make_motor_config(12)});
+  DriverCore core({make_motor_config(11), make_motor_config(12)});
   const auto start_time = TimePoint(1s);
-  driver_core.receive(make_status_1_frame(11), start_time);
-  EXPECT_FALSE(driver_core.enable(start_time));
-  driver_core.receive(make_status_1_frame(12), start_time);
-  ASSERT_TRUE(driver_core.enable(start_time));
-  ASSERT_TRUE(driver_core.set_command(0, 1.0, start_time));
-  ASSERT_TRUE(driver_core.set_command(1, 2.0, start_time));
+  core.receive(make_status_1_frame(11), start_time);
+  EXPECT_FALSE(core.enable(start_time));
+  core.receive(make_status_1_frame(12), start_time);
+  ASSERT_TRUE(core.enable(start_time));
+  ASSERT_TRUE(core.set_command(0, 1.0, start_time));
+  ASSERT_TRUE(core.set_command(1, 2.0, start_time));
   std::vector<can_msgs::msg::Frame> command_frames;
-  driver_core.command_frames(start_time + 20ms, command_frames);
+  core.command_frames(start_time + 20ms, command_frames);
   ASSERT_EQ(command_frames.size(), 2u);
   EXPECT_EQ(command_frames[0].id >> 8, 3u);
-  driver_core.command_frames(start_time + 101ms, command_frames);
-  EXPECT_TRUE(driver_core.faulted());
-  EXPECT_FALSE(driver_core.enabled());
+  core.command_frames(start_time + 101ms, command_frames);
+  EXPECT_TRUE(core.faulted());
+  EXPECT_FALSE(core.enabled());
   for (const auto &frame : command_frames) {
     EXPECT_EQ(frame.id >> 8, 1u);
     EXPECT_EQ(frame.data[0] | frame.data[1] | frame.data[2] | frame.data[3], 0);
   }
-  driver_core.receive(make_status_1_frame(11), start_time + 102ms);
-  driver_core.receive(make_status_1_frame(12), start_time + 102ms);
-  EXPECT_FALSE(driver_core.set_command(0, 1.0, start_time + 102ms));
-  EXPECT_TRUE(driver_core.faulted());
-  ASSERT_TRUE(driver_core.enable(start_time + 102ms));
-  EXPECT_FALSE(driver_core.faulted());
-  ASSERT_TRUE(driver_core.set_command(0, 1.0, start_time + 102ms));
-  ASSERT_TRUE(driver_core.set_command(1, 1.0, start_time + 102ms));
-  driver_core.disable();
-  driver_core.command_frames(start_time + 103ms, command_frames);
+  core.receive(make_status_1_frame(11), start_time + 102ms);
+  core.receive(make_status_1_frame(12), start_time + 102ms);
+  EXPECT_FALSE(core.set_command(0, 1.0, start_time + 102ms));
+  EXPECT_TRUE(core.faulted());
+  ASSERT_TRUE(core.enable(start_time + 102ms));
+  EXPECT_FALSE(core.faulted());
+  ASSERT_TRUE(core.set_command(0, 1.0, start_time + 102ms));
+  ASSERT_TRUE(core.set_command(1, 1.0, start_time + 102ms));
+  core.disable();
+  core.command_frames(start_time + 103ms, command_frames);
   EXPECT_EQ(command_frames[1].id >> 8, 1u);
 }
 TEST(Core, StaleRequiredFeedbackInvalidCommandsAndStartupStopAll)
 {
-  auto motor_config = make_motor_config();
-  motor_config.command_timeout = 1000ms;
-  DriverCore driver_core({motor_config, make_motor_config(12)});
+  auto cfg = make_motor_config();
+  cfg.command_timeout = 1000ms;
+  DriverCore core({cfg, make_motor_config(12)});
   const auto start_time = TimePoint(1s);
-  driver_core.receive(make_status_1_frame(11), start_time);
-  driver_core.receive(make_status_1_frame(12), start_time);
-  ASSERT_TRUE(driver_core.enable(start_time));
-  driver_core.receive(make_status_1_frame(12), start_time + 201ms);
-  driver_core.set_command(1, 1.0, start_time + 201ms);
+  core.receive(make_status_1_frame(11), start_time);
+  core.receive(make_status_1_frame(12), start_time);
+  ASSERT_TRUE(core.enable(start_time));
+  core.receive(make_status_1_frame(12), start_time + 201ms);
+  core.set_command(1, 1.0, start_time + 201ms);
   std::vector<can_msgs::msg::Frame> command_frames;
-  driver_core.command_frames(start_time + 201ms, command_frames);
-  EXPECT_TRUE(driver_core.faulted());
+  core.command_frames(start_time + 201ms, command_frames);
+  EXPECT_TRUE(core.faulted());
   EXPECT_EQ(command_frames[1].id >> 8, 1u);
-  DriverCore invalid_command_driver({motor_config});
+  DriverCore invalid_command_driver({cfg});
   invalid_command_driver.receive(make_status_1_frame(), start_time);
   ASSERT_TRUE(invalid_command_driver.enable(start_time));
   EXPECT_FALSE(invalid_command_driver.set_command(0, kUnknownValue, start_time));
   EXPECT_TRUE(invalid_command_driver.faulted());
   ASSERT_TRUE(invalid_command_driver.enable(start_time));
   EXPECT_FALSE(invalid_command_driver.set_command(0, 1000.0, start_time));
-  motor_config.startup_current_a = 2.0;
-  motor_config.control_mode = ControlMode::CurrentVelocity;
-  motor_config.rpm_control_threshold_rpm = 100.0;
-  motor_config.startup_timeout = 50ms;
-  DriverCore startup_driver({motor_config});
+  cfg.startup_current_a = 2.0;
+  cfg.mode = ControlMode::CurrentVelocity;
+  cfg.rpm_threshold = 100.0;
+  cfg.startup_timeout = 50ms;
+  DriverCore startup_driver({cfg});
   auto zero_speed_feedback = make_status_1_frame();
   zero_speed_feedback.data.fill(0);
   startup_driver.receive(zero_speed_feedback, start_time);
@@ -353,25 +353,25 @@ TEST(Core, StaleRequiredFeedbackInvalidCommandsAndStartupStopAll)
 }
 TEST(Core, MixedVelocityAndPositionRequireIndependentStatusStreams)
 {
-  auto motor_config = make_motor_config(21);
-  motor_config.control_mode = ControlMode::Position;
-  DriverCore driver_core({make_motor_config(), motor_config});
+  auto cfg = make_motor_config(21);
+  cfg.mode = ControlMode::Position;
+  DriverCore core({make_motor_config(), cfg});
   const auto start_time = TimePoint(1s);
-  driver_core.receive(make_status_1_frame(), start_time);
-  driver_core.receive(make_status_1_frame(21), start_time);
-  EXPECT_FALSE(driver_core.enable(start_time));
-  driver_core.receive(make_status_4_frame(), start_time);
-  ASSERT_TRUE(driver_core.enable(start_time));
-  EXPECT_NEAR(driver_core.states()[1].joint_position_rad, kPi / 2, 1e-9);
-  driver_core.set_command(0, 1.0, start_time);
-  driver_core.set_command(1, kPi / 2, start_time);
+  core.receive(make_status_1_frame(), start_time);
+  core.receive(make_status_1_frame(21), start_time);
+  EXPECT_FALSE(core.enable(start_time));
+  core.receive(make_status_4_frame(), start_time);
+  ASSERT_TRUE(core.enable(start_time));
+  EXPECT_NEAR(core.states()[1].pos_rad, kPi / 2, 1e-9);
+  core.set_command(0, 1.0, start_time);
+  core.set_command(1, kPi / 2, start_time);
   std::vector<can_msgs::msg::Frame> command_frames;
-  driver_core.command_frames(start_time + 10ms, command_frames);
+  core.command_frames(start_time + 10ms, command_frames);
   ASSERT_EQ(command_frames.size(), 2u);
   EXPECT_EQ(command_frames[0].id >> 8, 3u);
   EXPECT_EQ(command_frames[1].id >> 8, 4u);
-  motor_config.gear_ratio = 20.0;
-  EXPECT_THROW(DriverCore({motor_config}), std::invalid_argument);
+  cfg.gear_ratio = 20.0;
+  EXPECT_THROW(DriverCore({cfg}), std::invalid_argument);
   auto duplicate_config = make_motor_config();
   EXPECT_THROW(DriverCore({duplicate_config, duplicate_config}), std::invalid_argument);
 }
@@ -379,7 +379,7 @@ TEST(Core, MixedVelocityAndPositionRequireIndependentStatusStreams)
 TEST(Core, ZeroVelocityReleasesCurrentWhileZeroPositionCommandsJointZero)
 {
   auto steer = make_motor_config(21);
-  steer.control_mode = ControlMode::Position;
+  steer.mode = ControlMode::Position;
   steer.zero_offset_rad = kPi / 2;
   DriverCore driver({make_motor_config(), steer});
   const auto start = TimePoint(1s);
@@ -413,7 +413,7 @@ TEST(Core, VelocityRampUsesJointUnitsAndMotorDirection)
   auto motor = make_motor_config();
   motor.gear_ratio = 2.0;
   motor.direction = -1.0;
-  motor.joint_velocity_slew_rate_rad_s2 = kPi;
+  motor.vel_slew_rad_s2 = kPi;
   motor.command_timeout = 1000ms;
   motor.feedback_timeout = 1000ms;
   DriverCore driver({motor});
@@ -433,9 +433,9 @@ TEST(Core, CurrentStartupTransitionsOnlyOnFeedbackInCommandDirection)
 {
   auto motor = make_motor_config();
   motor.direction = -1.0;
-  motor.control_mode = ControlMode::CurrentVelocity;
+  motor.mode = ControlMode::CurrentVelocity;
   motor.startup_current_a = 2.0;
-  motor.rpm_control_threshold_rpm = 50.0;
+  motor.rpm_threshold = 50.0;
   DriverCore driver({motor});
   const auto start = TimePoint(1s);
   // Positive raw ERPM means negative joint velocity when direction=-1.
@@ -459,16 +459,16 @@ TEST(Core, CurrentStartupTransitionsOnlyOnFeedbackInCommandDirection)
 TEST(Core, PositionRangeAndOptionalTachometerAreEnforced)
 {
   auto motor = make_motor_config(21);
-  motor.control_mode = ControlMode::Position;
+  motor.mode = ControlMode::Position;
   motor.gear_ratio = 2.0;
-  motor.min_joint_position_rad = -1.0;
-  motor.max_joint_position_rad = 1.0;
+  motor.min_pos_rad = -1.0;
+  motor.max_pos_rad = 1.0;
   EXPECT_TRUE(command_is_valid(motor, -1.0));
   EXPECT_TRUE(command_is_valid(motor, 1.0));
   EXPECT_FALSE(command_is_valid(motor, 1.01));
   EXPECT_FALSE(command_is_valid(motor, std::numeric_limits<double>::infinity()));
   auto invalid = motor;
-  invalid.max_joint_position_rad = kPi;
+  invalid.max_pos_rad = kPi;
   EXPECT_THROW(DriverCore({invalid}), std::invalid_argument);
   invalid = motor;
   invalid.startup_current_a = 1.0;
@@ -484,7 +484,7 @@ TEST(Core, PositionRangeAndOptionalTachometerAreEnforced)
   EXPECT_FALSE(driver.enable(start));
   driver.receive(make_status_5_frame(), start);
   ASSERT_TRUE(driver.enable(start));
-  EXPECT_NEAR(driver.states()[1].joint_position_rad, kPi / 4, 1e-9);
+  EXPECT_NEAR(driver.states()[1].pos_rad, kPi / 4, 1e-9);
   ASSERT_TRUE(driver.set_command(0, 1.0, start));
   EXPECT_FALSE(driver.set_command(1, 1.01, start));
   std::vector<can_msgs::msg::Frame> frames;
@@ -504,15 +504,15 @@ TEST(Core, ModeSelectionValidatesCommandInterfaces)
   EXPECT_EQ(resolve_control_mode("current_velocity", "velocity"), ControlMode::CurrentVelocity);
   EXPECT_THROW(resolve_control_mode("current_velocity", "current"), std::invalid_argument);
   EXPECT_THROW(resolve_control_mode("velocity", "position"), std::invalid_argument);
-  EXPECT_THROW(control_mode_from_string("effort"), std::invalid_argument);
-  EXPECT_THROW(control_mode_from_string("unknown"), std::invalid_argument);
-  EXPECT_THROW(command_interface_for_mode(static_cast<ControlMode>(123)), std::invalid_argument);
+  EXPECT_THROW(parse_control_mode("effort"), std::invalid_argument);
+  EXPECT_THROW(parse_control_mode("unknown"), std::invalid_argument);
+  EXPECT_THROW(command_interface(static_cast<ControlMode>(123)), std::invalid_argument);
 }
 
 TEST(Core, CurrentCommandsUseAmpsDirectionAndSharedStops)
 {
   auto current = make_motor_config(12);
-  current.control_mode = ControlMode::Current;
+  current.mode = ControlMode::Current;
   current.max_current_a = 3.0;
   current.direction = -1.0;
   current.gear_ratio = 2.0;
@@ -524,9 +524,8 @@ TEST(Core, CurrentCommandsUseAmpsDirectionAndSharedStops)
   EXPECT_FALSE(driver.enable(start));
   driver.receive(make_status_5_frame(12), start);
   ASSERT_TRUE(driver.enable(start));
-  EXPECT_NEAR(driver.states()[0].joint_position_rad, kPi, 1e-9);
-  EXPECT_DOUBLE_EQ(
-    motor_current_to_joint_current(current, driver.states()[0].motor_current_a), -1.5);
+  EXPECT_NEAR(driver.states()[0].pos_rad, kPi, 1e-9);
+  EXPECT_DOUBLE_EQ(apply_direction(current, driver.states()[0].motor_current_a), -1.5);
   std::vector<can_msgs::msg::Frame> frames;
   for (double command : {2.5, -2.5, 0.0}) {
     ASSERT_TRUE(driver.set_command(0, command, start));
@@ -552,13 +551,13 @@ TEST(Core, CurrentCommandsUseAmpsDirectionAndSharedStops)
 TEST(Core, FourModesShareFeedbackTimeoutAndExplicitRecovery)
 {
   auto current = make_motor_config(12);
-  current.control_mode = ControlMode::Current;
+  current.mode = ControlMode::Current;
   auto steer = make_motor_config(21);
-  steer.control_mode = ControlMode::Position;
+  steer.mode = ControlMode::Position;
   auto hybrid = make_motor_config(31);
-  hybrid.control_mode = ControlMode::CurrentVelocity;
+  hybrid.mode = ControlMode::CurrentVelocity;
   hybrid.startup_current_a = 2.0;
-  hybrid.rpm_control_threshold_rpm = 100.0;
+  hybrid.rpm_threshold = 100.0;
   DriverCore driver({current, make_motor_config(), steer, hybrid});
   const auto start = TimePoint(1s);
   for (auto id : {12, 11, 21, 31}) {
@@ -595,9 +594,9 @@ TEST(Core, FourModesShareFeedbackTimeoutAndExplicitRecovery)
 TEST(Core, HybridRestartsOnReversalAndZeroButNotOnSpeedDrop)
 {
   auto motor = make_motor_config();
-  motor.control_mode = ControlMode::CurrentVelocity;
+  motor.mode = ControlMode::CurrentVelocity;
   motor.startup_current_a = 2.0;
-  motor.rpm_control_threshold_rpm = 50.0;
+  motor.rpm_threshold = 50.0;
   DriverCore driver({motor});
   const auto start = TimePoint(1s);
   driver.receive(make_status_1_frame(), start);  // Already rotating at 60 motor RPM.
@@ -632,11 +631,11 @@ TEST(Core, HybridRestartsOnReversalAndZeroButNotOnSpeedDrop)
 TEST(Core, HybridTransitionNeverCommandsAboveConfiguredSpeedLimit)
 {
   auto motor = make_motor_config();
-  motor.control_mode = ControlMode::CurrentVelocity;
+  motor.mode = ControlMode::CurrentVelocity;
   motor.startup_current_a = 2.0;
-  motor.rpm_control_threshold_rpm = 50.0;
-  motor.max_joint_velocity_rad_s = 10.0;
-  motor.joint_velocity_slew_rate_rad_s2 = 1.0;
+  motor.rpm_threshold = 50.0;
+  motor.max_vel_rad_s = 10.0;
+  motor.vel_slew_rad_s2 = 1.0;
   DriverCore driver({motor});
   const auto start = TimePoint(1s);
   auto feedback = make_status_1_frame();
@@ -653,7 +652,7 @@ TEST(Core, HybridTransitionNeverCommandsAboveConfiguredSpeedLimit)
 TEST(Core, DirectVelocityReversalPreservesSlewRate)
 {
   auto motor = make_motor_config();
-  motor.joint_velocity_slew_rate_rad_s2 = 10.0;
+  motor.vel_slew_rad_s2 = 10.0;
   motor.command_timeout = 1000ms;
   motor.feedback_timeout = 1000ms;
   DriverCore driver({motor});
@@ -673,21 +672,85 @@ TEST(Core, DirectVelocityReversalPreservesSlewRate)
   EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, -33).data);
 }
 
+TEST(Core, EpochFeedbackAndCommandsHaveValidReceiveTimes)
+{
+  auto cfg = make_motor_config();
+  cfg.mode = ControlMode::Current;
+  cfg.feedback_timeout = 200ms;
+  DriverCore driver({cfg});
+  const auto epoch = TimePoint{};
+  EXPECT_FALSE(driver.ready(epoch));
+  EXPECT_FALSE(driver.states()[0].status1_at.has_value());
+  auto malformed = make_status_1_frame();
+  malformed.dlc = 7;
+  EXPECT_FALSE(driver.receive(malformed, epoch));
+  EXPECT_FALSE(driver.states()[0].status1_at.has_value());
+  ASSERT_TRUE(driver.receive(make_status_1_frame(), epoch));
+  EXPECT_TRUE(feedback_fresh(driver.states()[0].status1_at, epoch, 200ms));
+  EXPECT_FALSE(driver.ready(epoch - 1ms));
+  EXPECT_TRUE(driver.ready(epoch + 200ms));
+  EXPECT_FALSE(driver.ready(epoch + 201ms));
+  ASSERT_TRUE(driver.enable(epoch));
+  ASSERT_TRUE(driver.set_command(0, 2.0, epoch));
+  std::vector<can_msgs::msg::Frame> frames;
+  driver.command_frames(epoch + 100ms, frames);  // Timeout boundary is inclusive.
+  ASSERT_EQ(frames.size(), 1u);
+  EXPECT_EQ(frames[0].data, protocol::make_set_current_frame(11, 2.0).data);
+  driver.command_frames(epoch + 101ms, frames);
+  EXPECT_TRUE(driver.faulted());
+  EXPECT_FALSE(driver.enabled());
+  EXPECT_EQ(frames[0].data, (std::array<std::uint8_t, 8>{}));
+}
+
+TEST(Core, StartupFailureReplacesEarlierMotorsCommandsWithStops)
+{
+  auto hybrid = make_motor_config(31);
+  hybrid.mode = ControlMode::CurrentVelocity;
+  hybrid.startup_current_a = 2.0;
+  hybrid.startup_timeout = 50ms;
+  DriverCore driver({make_motor_config(), hybrid});
+  const auto start = TimePoint(1s);
+  ASSERT_TRUE(driver.receive(make_status_1_frame(), start));
+  auto stopped = make_status_1_frame(31);
+  stopped.data.fill(0);
+  ASSERT_TRUE(driver.receive(stopped, start));
+  ASSERT_TRUE(driver.enable(start));
+  ASSERT_TRUE(driver.set_command(0, 1.0, start));
+  ASSERT_TRUE(driver.set_command(1, 10.0, start));
+  std::vector<can_msgs::msg::Frame> frames;
+  driver.command_frames(start + 10ms, frames);
+  ASSERT_EQ(frames.size(), 2u);
+  EXPECT_EQ(frames[0].id >> 8, 3u);
+  EXPECT_EQ(frames[1].data, protocol::make_set_current_frame(31, 2.0).data);
+  driver.command_frames(start + 51ms, frames);
+  EXPECT_TRUE(driver.faulted());
+  EXPECT_EQ(driver.fault_reason(), hybrid.name + ": startup timeout");
+  ASSERT_EQ(frames.size(), 2u);
+  for (const auto &frame : frames) {
+    EXPECT_EQ(frame.id >> 8, 1u);
+    EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{}));
+  }
+  ASSERT_TRUE(driver.enable(start + 60ms));
+  ASSERT_TRUE(driver.set_command(0, 1.0, start + 60ms));
+  driver.command_frames(start + 61ms, frames);
+  EXPECT_EQ(frames[1].data, (std::array<std::uint8_t, 8>{}));  // No previous startup command.
+}
+
 TEST(Core, ModeSpecificCurrentAndStartupLimitsAreValidated)
 {
   auto motor = make_motor_config();
   motor.startup_current_a = 2.0;
-  for (auto control_mode : {ControlMode::Current, ControlMode::Velocity, ControlMode::Position}) {
-    motor.control_mode = control_mode;
+  for (auto mode : {ControlMode::Current, ControlMode::Velocity, ControlMode::Position}) {
+    motor.mode = mode;
     EXPECT_THROW(DriverCore({motor}), std::invalid_argument);
   }
-  motor.control_mode = ControlMode::CurrentVelocity;
+  motor.mode = ControlMode::CurrentVelocity;
   EXPECT_NO_THROW(DriverCore({motor}));
   auto invalid = motor;
   invalid.startup_current_a = 0.0;
   EXPECT_THROW(DriverCore({invalid}), std::invalid_argument);
   invalid = motor;
-  invalid.rpm_control_threshold_rpm = 0.0;
+  invalid.rpm_threshold = 0.0;
   EXPECT_THROW(DriverCore({invalid}), std::invalid_argument);
   invalid = motor;
   invalid.max_current_a = 1.0;

@@ -166,7 +166,7 @@ Lyrical で全 3 パッケージを再ビルドし、既存の **35 ケースが
 
 関節の位置・速度と VESC の生値を変数名で区別し、単位、STATUS の受信済みフラグと
 受信時刻、CAN の送受信方向を明記しました。変更一覧と C++ 利用者向けの更新点は
-[ソースの構成](source-layout.md#c-変数の命名) に記載しています。
+[ソースの構成](source-layout.md#driver_core-の命名と関数の分担) に記載しています。
 ROS パラメータ、トピック、interface、メッセージ項目名は維持しています。
 
 変更前のコピーと照合し、C++ 16 ファイルの文字列・数値・演算子が同じであることを
@@ -192,3 +192,37 @@ C++ コードのビルド・実行も成功しました。
 インストールされたパッケージと通常・模擬ノードを確認し、
 `ros2 launch vesc_can_driver vesc_standalone.launch.py --show-args` で launch の解決も確認しました。
 Python 構文、C++ の clang-format、`git diff --check` は成功しています。
+
+## driver_core の短縮命名・重複整理後の検証
+
+`cfg` / `cmd` / `idx` / `pos` / `vel` を使い、単位を保って長い識別子を短縮しました。
+電流の符号変換を `apply_direction()` に統一し、モータ一覧と個別設定の検査、
+全台の事前検査とモード別指令生成を分けました。通常ノードの重複した起動時設定検査を
+除去し、異常停止時の指令リセットは `disable()` と共用しています。
+
+STATUS と指令の受信フラグ・時刻を `std::optional<TimePoint>` にまとめました。
+未受信、時刻ゼロでの受信、未来の受信時刻、期限ちょうど・期限切れを区別する検証と、
+後ろのモータの起動失敗で先に生成した指令も全台停止へ置き換える検証の 2 ケースを追加しました。
+既存 35 ケースと合わせた **37 ケースが成功**し、`colcon test-result` は
+`42 tests, 0 errors, 0 failures, 0 skipped` でした。
+
+ドライバ単体、ros2_control plugin、外部 CMake 利用者のビルド・実行も成功しました。
+`driver_core` とその更新に伴うコード・テストの clang-format、`git diff --check` を確認し、
+既存の通常ノード・通信の手元の整形を維持しました。
+`vesc_protocol.hpp/.cpp` は編集前のコピーとバイト単位で一致しています。
+`driver_core.cpp` は 473 行から 420 行になりました。
+
+## 通信・ROS・起動設定の変数名整理後の検証
+
+2026-10-14、通信・通常ノード・状態メッセージ変換・ros2_control・模擬ノード・
+起動設定・テストの 15 ファイルで、`cfg` / `opts` / `cmd` / `pub` / `sub` / `params` に
+命名を揃えました。通常ノードの期限判定には `steady_now`、メッセージの ROS 時刻には
+`stamp` を使っています。公開 C++ メンバの変更点は
+[通信・ROS・起動設定の変数名](source-layout.md#通信ros起動設定の変数名) に記載しています。
+
+C++ の文字列・数値・演算子と、Python の変数名以外の AST が編集前と同じであることを
+確認しました。`driver_core.hpp/.cpp` と `vesc_protocol.hpp/.cpp` も編集前とバイト単位で一致します。
+Lyrical でドライバ単体と ros2_control plugin を再ビルドし、既存の **37 ケースが成功**しました。
+`colcon test-result` は `42 tests, 0 errors, 0 failures, 0 skipped` でした。
+外部 CMake 利用者のビルド・実行、起動設定の解決、変更箇所の clang-format、
+Python 3 ファイルの Black と `git diff --check` も成功しています。

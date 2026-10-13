@@ -23,23 +23,22 @@ protected:
 };
 TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
 {
-  MotorConfig motor_config;
-  motor_config.name = "drive";
-  motor_config.controller_id = 11;
-  motor_config.command_timeout = 100ms;
-  motor_config.feedback_timeout = 100ms;
-  TransportOptions transport_options;
-  transport_options.can_tx_topic = "/transport_test/tx";
-  transport_options.can_rx_topic = "/transport_test/rx";
-  transport_options.send_period = 5ms;
+  MotorConfig cfg;
+  cfg.name = "drive";
+  cfg.controller_id = 11;
+  cfg.command_timeout = 100ms;
+  cfg.feedback_timeout = 100ms;
+  TransportOptions opts;
+  opts.tx_topic = "/transport_test/tx";
+  opts.rx_topic = "/transport_test/rx";
+  opts.send_period = 5ms;
   auto peer_node = std::make_shared<rclcpp::Node>("transport_test_peer");
   auto can_node = std::make_shared<rclcpp::Node>("transport_test_io");
-  auto feedback_publisher = peer_node->create_publisher<can_msgs::msg::Frame>(
-    transport_options.can_rx_topic, rclcpp::SensorDataQoS());
+  auto feedback_publisher =
+    peer_node->create_publisher<can_msgs::msg::Frame>(opts.rx_topic, rclcpp::SensorDataQoS());
   std::vector<can_msgs::msg::Frame> received_frames;
-  auto command_subscription =
-    peer_node->create_subscription<can_msgs::msg::Frame>(transport_options.can_tx_topic, 100,
-      [&](can_msgs::msg::Frame::ConstSharedPtr frame) { received_frames.push_back(*frame); });
+  auto command_subscription = peer_node->create_subscription<can_msgs::msg::Frame>(opts.tx_topic,
+    100, [&](can_msgs::msg::Frame::ConstSharedPtr frame) { received_frames.push_back(*frame); });
   bool publish_feedback = true;
   auto feedback_timer = peer_node->create_wall_timer(10ms, [&]() {
     if (!publish_feedback) {
@@ -53,7 +52,7 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
   });
   rclcpp::executors::SingleThreadedExecutor peer_executor;
   peer_executor.add_node(peer_node);
-  CanTransport can_transport({motor_config}, transport_options, can_node);
+  CanTransport can_transport({cfg}, opts, can_node);
   can_transport.start();
   auto spin_peer_until = [&](auto predicate, std::chrono::milliseconds timeout) {
     const auto deadline = SteadyClock::now() + timeout;
@@ -66,7 +65,8 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
     }
     return predicate();
   };
-  ASSERT_TRUE(spin_peer_until([&]() { return can_transport.snapshot()[0].has_status_1; }, 2s));
+  ASSERT_TRUE(
+    spin_peer_until([&]() { return can_transport.snapshot()[0].status1_at.has_value(); }, 2s));
   ASSERT_TRUE(can_transport.enable());
   // Multiple pending updates collapse to the latest value.
   ASSERT_TRUE(can_transport.set_command(0, 1.0));
@@ -104,7 +104,10 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
   EXPECT_FALSE(can_transport.enable());
   publish_feedback = true;
   ASSERT_TRUE(spin_peer_until(
-    [&]() { return can_transport.snapshot()[0].status_1_received_at > SteadyClock::now() - 30ms; },
+    [&]() {
+      const auto stamp = can_transport.snapshot()[0].status1_at;
+      return stamp && *stamp > SteadyClock::now() - 30ms;
+    },
     300ms));
   ASSERT_TRUE(can_transport.enable());
   for (double invalid : {kUnknownValue, 1000.0}) {

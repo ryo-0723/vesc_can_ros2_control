@@ -29,116 +29,104 @@ class VescNode : public rclcpp::Node
 public:
   VescNode() : rclcpp::Node("vesc_can_ros2_control")
   {
-    TransportOptions transport_options;
-    transport_options.can_tx_topic =
-      declare_parameter<std::string>("can_tx_topic", "/socketcan_bridge/tx");
-    transport_options.can_rx_topic =
-      declare_parameter<std::string>("can_rx_topic", "/socketcan_bridge/rx");
-    transport_options.send_period =
+    TransportOptions opts;
+    opts.tx_topic = declare_parameter<std::string>("can_tx_topic", "/socketcan_bridge/tx");
+    opts.rx_topic = declare_parameter<std::string>("can_rx_topic", "/socketcan_bridge/rx");
+    opts.send_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("update_period_ms", 20));
-    const auto state_publish_period =
+    const auto state_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("state_publish_period_ms", 100));
-    if (state_publish_period.count() <= 0) {
+
+    if (state_period.count() <= 0) {
       throw std::invalid_argument("State period must be positive");
     }
     auto_enable_once_ = declare_parameter<bool>("auto_enable_once", false);
 
-    const auto motor_names =
+    const auto names =
       declare_parameter<std::vector<std::string>>("motors", std::vector<std::string>{});
-    motor_configs_.reserve(motor_names.size());
-    for (const auto &motor_name : motor_names) {
-      motor_configs_.push_back(load_motor_config(motor_name));
+    configs_.reserve(names.size());
+
+    for (const auto &motor_name : names) {
+      configs_.push_back(load_motor_config(motor_name));
     }
-    validate_configs(motor_configs_);
-    initialize_can_transport(transport_options);
+    initialize_can_transport(opts);
     initialize_command_interfaces();
     initialize_state_publishers();
-    state_publish_timer_ = create_wall_timer(state_publish_period, [this]() { publish_states(); });
+    state_timer_ = create_wall_timer(state_period, [this]() { publish_states(); });
   }
 
   void stop()
   {
-    can_transport_->disable();
-    can_transport_->shutdown();
+    transport_->disable();
+    transport_->shutdown();
   }
 
 private:
   MotorConfig load_motor_config(const std::string &motor_name)
   {
-    const auto parameter_prefix = motor_name + ".";
-    MotorConfig motor_config;
-    motor_config.name = motor_name;
-    const auto controller_id =
-      declare_parameter<std::int64_t>(parameter_prefix + "controller_id", -1);
+    const auto prefix = motor_name + ".";
+    MotorConfig cfg;
+    cfg.name = motor_name;
+    const auto controller_id = declare_parameter<std::int64_t>(prefix + "controller_id", -1);
     if (controller_id < 0 || controller_id > 254) {
       throw std::invalid_argument(motor_name + ": controller ID must be in [0, 254]");
     }
-    motor_config.controller_id = static_cast<std::uint8_t>(controller_id);
+    cfg.controller_id = static_cast<std::uint8_t>(controller_id);
 
-    const auto control_mode_name =
-      declare_parameter<std::string>(parameter_prefix + "control_mode", "");
-    const auto default_command_interface =
-      control_mode_name.empty()
-        ? std::string("velocity")
-        : std::string(command_interface_for_mode(control_mode_from_string(control_mode_name)));
-    const auto command_interface_name = declare_parameter<std::string>(
-      parameter_prefix + "command_interface", default_command_interface);
-    motor_config.control_mode = resolve_control_mode(control_mode_name, command_interface_name);
-    motor_config.pole_pairs = declare_parameter<double>(parameter_prefix + "pole_pairs", 7.0);
-    motor_config.gear_ratio = declare_parameter<double>(parameter_prefix + "gear_ratio", 1.0);
-    motor_config.direction = declare_parameter<double>(parameter_prefix + "direction", 1.0);
-    motor_config.zero_offset_rad =
-      declare_parameter<double>(parameter_prefix + "zero_offset_rad", 0.0);
-    motor_config.min_joint_position_rad =
-      declare_parameter<double>(parameter_prefix + "min_position", -kPi);
-    motor_config.max_joint_position_rad =
-      declare_parameter<double>(parameter_prefix + "max_position", kPi);
+    const auto mode_name = declare_parameter<std::string>(prefix + "control_mode", "");
+    const auto default_interface =
+      mode_name.empty() ? std::string("velocity")
+                        : std::string(command_interface(parse_control_mode(mode_name)));
+    const auto cmd_interface =
+      declare_parameter<std::string>(prefix + "command_interface", default_interface);
+    cfg.mode = resolve_control_mode(mode_name, cmd_interface);
+    cfg.pole_pairs = declare_parameter<double>(prefix + "pole_pairs", 7.0);
+    cfg.gear_ratio = declare_parameter<double>(prefix + "gear_ratio", 1.0);
+    cfg.direction = declare_parameter<double>(prefix + "direction", 1.0);
+    cfg.zero_offset_rad = declare_parameter<double>(prefix + "zero_offset_rad", 0.0);
+    cfg.min_pos_rad = declare_parameter<double>(prefix + "min_position", -kPi);
+    cfg.max_pos_rad = declare_parameter<double>(prefix + "max_position", kPi);
 
-    const auto max_motor_rpm = declare_parameter<double>(parameter_prefix + "max_rpm", 5600.0);
-    const auto motor_rpm_slew_rate =
-      declare_parameter<double>(parameter_prefix + "rpm_slew_rate", 4000.0);
-    const double motor_rpm_to_joint_rad_s = 2.0 * kPi / (60.0 * motor_config.gear_ratio);
-    motor_config.max_joint_velocity_rad_s = max_motor_rpm * motor_rpm_to_joint_rad_s;
-    motor_config.joint_velocity_slew_rate_rad_s2 = motor_rpm_slew_rate * motor_rpm_to_joint_rad_s;
-    motor_config.max_current_a =
-      declare_parameter<double>(parameter_prefix + "max_current_a", 10.0);
-    motor_config.startup_current_a =
-      declare_parameter<double>(parameter_prefix + "startup_current_a", 0.0);
-    motor_config.rpm_control_threshold_rpm =
-      declare_parameter<double>(parameter_prefix + "rpm_control_threshold_rpm", 1000.0);
-    motor_config.startup_timeout = std::chrono::milliseconds(
-      declare_parameter<std::int64_t>(parameter_prefix + "startup_timeout_ms", 1000));
-    motor_config.feedback_timeout = std::chrono::milliseconds(
-      declare_parameter<std::int64_t>(parameter_prefix + "feedback_timeout_ms", 500));
-    motor_config.command_timeout = std::chrono::milliseconds(
-      declare_parameter<std::int64_t>(parameter_prefix + "command_timeout_ms", 500));
-    motor_config.require_tachometer =
-      declare_parameter<bool>(parameter_prefix + "require_tachometer", false);
-    return motor_config;
+    const auto max_rpm = declare_parameter<double>(prefix + "max_rpm", 5600.0);
+    const auto rpm_slew_rate = declare_parameter<double>(prefix + "rpm_slew_rate", 4000.0);
+    const double rpm_to_rad_s = 2.0 * kPi / (60.0 * cfg.gear_ratio);
+    cfg.max_vel_rad_s = max_rpm * rpm_to_rad_s;
+    cfg.vel_slew_rad_s2 = rpm_slew_rate * rpm_to_rad_s;
+    cfg.max_current_a = declare_parameter<double>(prefix + "max_current_a", 10.0);
+    cfg.startup_current_a = declare_parameter<double>(prefix + "startup_current_a", 0.0);
+    cfg.rpm_threshold = declare_parameter<double>(prefix + "rpm_control_threshold_rpm", 1000.0);
+    cfg.startup_timeout = std::chrono::milliseconds(
+      declare_parameter<std::int64_t>(prefix + "startup_timeout_ms", 1000));
+    cfg.feedback_timeout = std::chrono::milliseconds(
+      declare_parameter<std::int64_t>(prefix + "feedback_timeout_ms", 500));
+    cfg.command_timeout = std::chrono::milliseconds(
+      declare_parameter<std::int64_t>(prefix + "command_timeout_ms", 500));
+    cfg.require_tachometer = declare_parameter<bool>(prefix + "require_tachometer", false);
+    return cfg;
   }
 
-  void initialize_can_transport(const TransportOptions &transport_options)
+  void initialize_can_transport(const TransportOptions &opts)
   {
-    auto node_options = rclcpp::NodeOptions().use_global_arguments(false);
-    node_options.context(get_node_base_interface()->get_context());
-    auto can_node = std::make_shared<rclcpp::Node>("vesc_can_io", get_namespace(), node_options);
-    can_transport_ = std::make_unique<CanTransport>(motor_configs_, transport_options, can_node);
-    can_transport_->start();
+    auto node_opts = rclcpp::NodeOptions().use_global_arguments(false);
+    node_opts.context(get_node_base_interface()->get_context());
+    auto can_node = std::make_shared<rclcpp::Node>("vesc_can_io", get_namespace(), node_opts);
+    transport_ = std::make_unique<CanTransport>(configs_, opts, can_node);
+    transport_->start();
   }
 
   void initialize_command_interfaces()
   {
-    motor_command_subscriptions_.reserve(motor_configs_.size());
-    for (std::size_t motor_index = 0; motor_index < motor_configs_.size(); ++motor_index) {
-      const auto command_topic = "~/motors/" + motor_configs_[motor_index].name + "/command";
-      motor_command_subscriptions_.push_back(create_subscription<Float64>(
-        command_topic, 1, [this, motor_index](Float64::ConstSharedPtr message) {
-          can_transport_->set_command(motor_index, message->data);
+    cmd_subs_.reserve(configs_.size());
+    for (std::size_t motor_idx = 0; motor_idx < configs_.size(); ++motor_idx) {
+      const auto cmd_topic = "~/motors/" + configs_[motor_idx].name + "/command";
+      cmd_subs_.push_back(
+        create_subscription<Float64>(cmd_topic, 1, [this, motor_idx](Float64::ConstSharedPtr msg) {
+          transport_->set_command(motor_idx, msg->data);
         }));
     }
-    joint_command_subscription_ = create_subscription<JointState>("~/joint_commands", 1,
-      [this](JointState::ConstSharedPtr message) { handle_joint_commands(*message); });
-    enable_service_ = create_service<SetBool>("~/enable",
+    joint_cmd_sub_ = create_subscription<JointState>("~/joint_commands", 1,
+      [this](JointState::ConstSharedPtr msg) { handle_joint_commands(*msg); });
+    enable_srv_ = create_service<SetBool>("~/enable",
       [this](SetBool::Request::SharedPtr request, SetBool::Response::SharedPtr response) {
         handle_enable_request(*request, *response);
       });
@@ -146,41 +134,38 @@ private:
 
   void initialize_state_publishers()
   {
-    motor_state_publishers_.reserve(motor_configs_.size());
-    for (const auto &motor_config : motor_configs_) {
-      motor_state_publishers_.push_back(
-        create_publisher<VescStateStamped>("~/motors/" + motor_config.name + "/state", 10));
+    state_pubs_.reserve(configs_.size());
+    for (const auto &cfg : configs_) {
+      state_pubs_.push_back(
+        create_publisher<VescStateStamped>("~/motors/" + cfg.name + "/state", 10));
     }
-    joint_state_publisher_ = create_publisher<JointState>("~/joint_states", 10);
-    diagnostic_publisher_ = create_publisher<DiagnosticArray>("/diagnostics", 10);
+    joint_state_pub_ = create_publisher<JointState>("~/joint_states", 10);
+    diag_pub_ = create_publisher<DiagnosticArray>("/diagnostics", 10);
   }
 
-  void handle_joint_commands(const JointState &message)
+  void handle_joint_commands(const JointState &msg)
   {
-    const auto joint_count = message.name.size();
-    if ((!message.position.empty() && message.position.size() != joint_count) ||
-        (!message.velocity.empty() && message.velocity.size() != joint_count)) {
-      can_transport_->request_stop();
+    const auto joint_count = msg.name.size();
+    if ((!msg.position.empty() && msg.position.size() != joint_count) ||
+        (!msg.velocity.empty() && msg.velocity.size() != joint_count)) {
+      transport_->request_stop();
       RCLCPP_ERROR(get_logger(), "Joint command arrays must match name length");
       return;
     }
-    for (std::size_t joint_index = 0; joint_index < joint_count; ++joint_index) {
-      const auto motor_config_it = std::find_if(
-        motor_configs_.begin(), motor_configs_.end(), [&](const MotorConfig &motor_config) {
-          return motor_config.name == message.name[joint_index];
-        });
-      if (motor_config_it == motor_configs_.end()) {
+    for (std::size_t joint_idx = 0; joint_idx < joint_count; ++joint_idx) {
+      const auto cfg_it = std::find_if(configs_.begin(), configs_.end(),
+        [&](const MotorConfig &cfg) { return cfg.name == msg.name[joint_idx]; });
+      if (cfg_it == configs_.end()) {
         continue;
       }
       // JointState.effort is torque [Nm]; current [A] uses the per-motor Float64 topic.
-      if (motor_config_it->control_mode == ControlMode::Current) {
+      if (cfg_it->mode == ControlMode::Current) {
         continue;
       }
-      const auto &command_values =
-        uses_velocity_command(motor_config_it->control_mode) ? message.velocity : message.position;
-      if (!command_values.empty()) {
-        const auto motor_index = static_cast<std::size_t>(motor_config_it - motor_configs_.begin());
-        can_transport_->set_command(motor_index, command_values[joint_index]);
+      const auto &values = is_velocity_mode(cfg_it->mode) ? msg.velocity : msg.position;
+      if (!values.empty()) {
+        const auto motor_idx = static_cast<std::size_t>(cfg_it - configs_.begin());
+        transport_->set_command(motor_idx, values[joint_idx]);
       }
     }
   }
@@ -189,12 +174,12 @@ private:
   {
     auto_enable_once_ = false;
     if (!request.data) {
-      can_transport_->disable();
+      transport_->disable();
       response.success = true;
       response.message = "Disabled";
       return;
     }
-    response.success = can_transport_->enable();
+    response.success = transport_->enable();
     if (response.success) {
       response.message = "Enabled; send fresh commands for every motor";
     } else {
@@ -202,116 +187,109 @@ private:
     }
   }
 
-  static void add_diagnostic_value(DiagnosticStatus &message, const std::string &diagnostic_key,
-    const std::string &diagnostic_value)
+  static void add_diagnostic_value(
+    DiagnosticStatus &msg, const std::string &key, const std::string &value)
   {
     diagnostic_msgs::msg::KeyValue field;
-    field.key = diagnostic_key;
-    field.value = diagnostic_value;
-    message.values.push_back(field);
+    field.key = key;
+    field.value = value;
+    msg.values.push_back(field);
   }
 
-  DiagnosticStatus make_diagnostic_status(const MotorConfig &motor_config,
-    const MotorState &motor_state, TimePoint current_time, bool feedback_ready, bool enabled,
-    bool faulted, const std::string &fault_reason) const
+  DiagnosticStatus make_diagnostic_status(const MotorConfig &cfg, const MotorState &state,
+    TimePoint steady_now, bool ready, bool enabled, bool faulted,
+    const std::string &fault_reason) const
   {
-    DiagnosticStatus message;
-    message.name = std::string(get_namespace()) + "/vesc/" + motor_config.name;
-    message.hardware_id = "vesc_can_id_" + std::to_string(motor_config.controller_id);
-    if (!feedback_ready) {
-      message.level = DiagnosticStatus::ERROR;
-      message.message = "Required feedback missing/stale or position out of range";
+    DiagnosticStatus msg;
+    msg.name = std::string(get_namespace()) + "/vesc/" + cfg.name;
+    msg.hardware_id = "vesc_can_id_" + std::to_string(cfg.controller_id);
+    if (!ready) {
+      msg.level = DiagnosticStatus::ERROR;
+      msg.message = "Required feedback missing/stale or position out of range";
     } else if (faulted) {
-      message.level = DiagnosticStatus::ERROR;
-      message.message = fault_reason;
+      msg.level = DiagnosticStatus::ERROR;
+      msg.message = fault_reason;
     } else if (enabled) {
-      message.level = DiagnosticStatus::OK;
-      message.message = "Enabled";
+      msg.level = DiagnosticStatus::OK;
+      msg.message = "Enabled";
     } else {
-      message.level = DiagnosticStatus::WARN;
-      message.message = "Disabled";
+      msg.level = DiagnosticStatus::WARN;
+      msg.message = "Disabled";
     }
-    const auto timeout = motor_config.feedback_timeout;
-    const auto add_freshness = [&](const std::string &diagnostic_key, bool has_feedback,
-                                 TimePoint received_at) {
-      const bool feedback_fresh =
-        feedback_is_fresh(has_feedback, received_at, current_time, timeout);
-      add_diagnostic_value(message, diagnostic_key, feedback_fresh ? "true" : "false");
+    const auto timeout = cfg.feedback_timeout;
+    const auto add_freshness = [&](const std::string &key,
+                                 const std::optional<TimePoint> &received_at) {
+      const bool fresh = feedback_fresh(received_at, steady_now, timeout);
+      add_diagnostic_value(msg, key, fresh ? "true" : "false");
     };
-    add_freshness("status_1_fresh", motor_state.has_status_1, motor_state.status_1_received_at);
-    add_freshness("status_2_fresh", motor_state.has_status_2, motor_state.status_2_received_at);
-    add_freshness("status_3_fresh", motor_state.has_status_3, motor_state.status_3_received_at);
-    add_freshness("status_4_fresh", motor_state.has_status_4, motor_state.status_4_received_at);
-    add_freshness("status_5_fresh", motor_state.has_status_5, motor_state.status_5_received_at);
-    add_freshness("status_6_fresh", motor_state.has_status_6, motor_state.status_6_received_at);
-    add_diagnostic_value(message, "enabled", enabled ? "true" : "false");
-    add_diagnostic_value(message, "driver_faulted", faulted ? "true" : "false");
-    add_diagnostic_value(message, "unavailable_vesc_fields",
+    add_freshness("status_1_fresh", state.status1_at);
+    add_freshness("status_2_fresh", state.status2_at);
+    add_freshness("status_3_fresh", state.status3_at);
+    add_freshness("status_4_fresh", state.status4_at);
+    add_freshness("status_5_fresh", state.status5_at);
+    add_freshness("status_6_fresh", state.status6_at);
+    add_diagnostic_value(msg, "enabled", enabled ? "true" : "false");
+    add_diagnostic_value(msg, "driver_faulted", faulted ? "true" : "false");
+    add_diagnostic_value(msg, "unavailable_vesc_fields",
       "avg_id,avg_iq,ntc_temp_mos1,ntc_temp_mos2,ntc_temp_mos3,avg_vd,avg_vq,"
       "distance_traveled,fault_code");
-    const bool status_6_fresh = feedback_is_fresh(
-      motor_state.has_status_6, motor_state.status_6_received_at, current_time, timeout);
+    const bool status_6_fresh = feedback_fresh(state.status6_at, steady_now, timeout);
     add_diagnostic_value(
-      message, "adc_1_v", std::to_string(status_6_fresh ? motor_state.adc_1_v : kUnknownValue));
+      msg, "adc_1_v", std::to_string(status_6_fresh ? state.adc_1_v : kUnknownValue));
     add_diagnostic_value(
-      message, "adc_2_v", std::to_string(status_6_fresh ? motor_state.adc_2_v : kUnknownValue));
+      msg, "adc_2_v", std::to_string(status_6_fresh ? state.adc_2_v : kUnknownValue));
     add_diagnostic_value(
-      message, "adc_3_v", std::to_string(status_6_fresh ? motor_state.adc_3_v : kUnknownValue));
-    add_diagnostic_value(
-      message, "ppm", std::to_string(status_6_fresh ? motor_state.ppm : kUnknownValue));
-    return message;
+      msg, "adc_3_v", std::to_string(status_6_fresh ? state.adc_3_v : kUnknownValue));
+    add_diagnostic_value(msg, "ppm", std::to_string(status_6_fresh ? state.ppm : kUnknownValue));
+    return msg;
   }
 
   void publish_states()
   {
-    if (auto_enable_once_ && can_transport_->enable()) {
+    if (auto_enable_once_ && transport_->enable()) {
       auto_enable_once_ = false;
     }
-    const auto motor_states = can_transport_->snapshot();
-    const auto current_time = SteadyClock::now();
-    const auto message_stamp = now();
-    const bool enabled = can_transport_->enabled();
-    const bool faulted = can_transport_->faulted();
-    const auto fault_reason = faulted ? can_transport_->fault_reason() : std::string{};
-    JointState joint_states;
-    DiagnosticArray diagnostics;
-    joint_states.header.stamp = message_stamp;
-    diagnostics.header.stamp = message_stamp;
-    for (std::size_t motor_index = 0; motor_index < motor_configs_.size(); ++motor_index) {
-      const auto &motor_config = motor_configs_[motor_index];
-      const auto &motor_state = motor_states[motor_index];
-      const bool feedback_ready = state_ready(motor_config, motor_state, current_time);
-      VescStateStamped vesc_state;
-      vesc_state.header.stamp = message_stamp;
-      vesc_state.state = make_vesc_state(motor_config, motor_state, current_time);
-      motor_state_publishers_[motor_index]->publish(vesc_state);
-      const bool position_fresh =
-        motor_config.control_mode == ControlMode::Position
-          ? feedback_ready
-          : feedback_is_fresh(motor_state.has_status_5, motor_state.status_5_received_at,
-              current_time, motor_config.feedback_timeout);
-      joint_states.name.push_back(motor_config.name);
-      joint_states.position.push_back(
-        feedback_ready && position_fresh ? motor_state.joint_position_rad : kUnknownValue);
-      joint_states.velocity.push_back(
-        feedback_ready ? motor_state.joint_velocity_rad_s : kUnknownValue);
-      diagnostics.status.push_back(make_diagnostic_status(
-        motor_config, motor_state, current_time, feedback_ready, enabled, faulted, fault_reason));
+    const auto states = transport_->snapshot();
+    const auto steady_now = SteadyClock::now();
+    const auto stamp = now();
+    const bool enabled = transport_->enabled();
+    const bool faulted = transport_->faulted();
+    const auto fault_reason = faulted ? transport_->fault_reason() : std::string{};
+    JointState joint_msg;
+    DiagnosticArray diag_msg;
+    joint_msg.header.stamp = stamp;
+    diag_msg.header.stamp = stamp;
+    for (std::size_t motor_idx = 0; motor_idx < configs_.size(); ++motor_idx) {
+      const auto &cfg = configs_[motor_idx];
+      const auto &state = states[motor_idx];
+      const bool ready = state_ready(cfg, state, steady_now);
+      VescStateStamped vesc_msg;
+      vesc_msg.header.stamp = stamp;
+      vesc_msg.state = make_vesc_state(cfg, state, steady_now);
+      state_pubs_[motor_idx]->publish(vesc_msg);
+      const bool pos_fresh = cfg.mode == ControlMode::Position
+                               ? ready
+                               : feedback_fresh(state.status5_at, steady_now, cfg.feedback_timeout);
+      joint_msg.name.push_back(cfg.name);
+      joint_msg.position.push_back(ready && pos_fresh ? state.pos_rad : kUnknownValue);
+      joint_msg.velocity.push_back(ready ? state.vel_rad_s : kUnknownValue);
+      diag_msg.status.push_back(
+        make_diagnostic_status(cfg, state, steady_now, ready, enabled, faulted, fault_reason));
     }
-    joint_state_publisher_->publish(joint_states);
-    diagnostic_publisher_->publish(diagnostics);
+    joint_state_pub_->publish(joint_msg);
+    diag_pub_->publish(diag_msg);
   }
 
-  std::vector<MotorConfig> motor_configs_;
+  std::vector<MotorConfig> configs_;
   bool auto_enable_once_{false};
-  std::unique_ptr<CanTransport> can_transport_;
-  std::vector<rclcpp::Subscription<Float64>::SharedPtr> motor_command_subscriptions_;
-  rclcpp::Subscription<JointState>::SharedPtr joint_command_subscription_;
-  rclcpp::Service<SetBool>::SharedPtr enable_service_;
-  std::vector<rclcpp::Publisher<VescStateStamped>::SharedPtr> motor_state_publishers_;
-  rclcpp::Publisher<JointState>::SharedPtr joint_state_publisher_;
-  rclcpp::Publisher<DiagnosticArray>::SharedPtr diagnostic_publisher_;
-  rclcpp::TimerBase::SharedPtr state_publish_timer_;
+  std::unique_ptr<CanTransport> transport_;
+  std::vector<rclcpp::Subscription<Float64>::SharedPtr> cmd_subs_;
+  rclcpp::Subscription<JointState>::SharedPtr joint_cmd_sub_;
+  rclcpp::Service<SetBool>::SharedPtr enable_srv_;
+  std::vector<rclcpp::Publisher<VescStateStamped>::SharedPtr> state_pubs_;
+  rclcpp::Publisher<JointState>::SharedPtr joint_state_pub_;
+  rclcpp::Publisher<DiagnosticArray>::SharedPtr diag_pub_;
+  rclcpp::TimerBase::SharedPtr state_timer_;
 };
 }  // namespace vesc_can_driver
 

@@ -16,8 +16,8 @@ namespace vesc_can_driver
 {
 struct TransportOptions
 {
-  std::string can_tx_topic{"/can/tx"};
-  std::string can_rx_topic{"/can/rx"};
+  std::string tx_topic{"/can/tx"};
+  std::string rx_topic{"/can/rx"};
   std::chrono::milliseconds send_period{10};
 };
 
@@ -25,8 +25,8 @@ struct TransportOptions
 class CanTransport
 {
 public:
-  CanTransport(std::vector<MotorConfig> motor_configs, TransportOptions transport_options,
-    rclcpp::Node::SharedPtr can_node);
+  CanTransport(
+    std::vector<MotorConfig> configs, TransportOptions opts, rclcpp::Node::SharedPtr can_node);
   ~CanTransport();
   CanTransport(const CanTransport &) = delete;
   CanTransport &operator=(const CanTransport &) = delete;
@@ -48,32 +48,32 @@ public:
   {
     return faulted_.load();
   }
-  bool try_set_commands(const std::vector<double> &command_values);
-  bool set_command(std::size_t motor_index, double command_value);
-  bool try_snapshot(std::vector<MotorState> &motor_states);
+  bool try_set_commands(const std::vector<double> &values);
+  bool set_command(std::size_t motor_idx, double value);
+  bool try_snapshot(std::vector<MotorState> &states);
   std::vector<MotorState> snapshot();
   std::string fault_reason();
 
 private:
   struct PendingCommand
   {
-    double command_value{};
+    double value{};
     TimePoint received_at{};
-    bool has_pending_update{false};
+    bool updated{false};
   };
   void send_commands();
-  DriverCore driver_core_;
-  TransportOptions transport_options_;
+  DriverCore core_;
+  TransportOptions opts_;
   rclcpp::Node::SharedPtr can_node_;
-  rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr can_tx_publisher_;
-  rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr can_rx_subscription_;
+  rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr tx_pub_;
+  rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr rx_sub_;
   rclcpp::TimerBase::SharedPtr send_timer_;
-  rclcpp::executors::SingleThreadedExecutor can_executor_;
-  std::thread executor_thread_;
+  rclcpp::executors::SingleThreadedExecutor can_exec_;
+  std::thread exec_thread_;
   std::mutex state_mutex_;
-  std::condition_variable feedback_changed_;
-  std::vector<PendingCommand> pending_commands_;
-  std::vector<can_msgs::msg::Frame> command_frames_;
+  std::condition_variable feedback_cv_;
+  std::vector<PendingCommand> pending_cmds_;
+  std::vector<can_msgs::msg::Frame> cmd_frames_;
   std::atomic<bool> shutdown_started_{false};
   std::atomic<bool> stop_requested_{true};
   std::atomic<bool> enabled_{false};
