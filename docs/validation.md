@@ -1,4 +1,10 @@
-# 公開準備の検証記録 — 2026-10-13
+# 公開準備の検証記録
+
+各節は検証当時の構成を記録しています
+旧 vesc_msgs と上流定義への言及は過去の記録で、現在は独自の vesc_can_msgs に統合しています
+最新結果は [独自状態 msg と統合後の検証](#独自状態-msg-と統合後の検証) を参照してください
+
+## 初回の公開準備 — 2026-10-13
 
 既存の CAN ドライバ / ros2_control 分割を保持し、模擬 VESC のソースを
 `vesc_can_driver/test/support` へ移動しました。現在の `src` の各ファイルはすべて
@@ -480,3 +486,37 @@ colcon test-result は実行単位 5 件を含む **62 tests, 0 errors, 0 failur
 全 C++ の clang-format、Python の Black、git diff --check も成功しました
 上流 VescState / VescStateStamped の定義は変更していません
 再起動の検証は模擬 CAN で、実機への再起動命令は送信していません
+
+
+## 独自状態 msg と統合後の検証
+
+2026-10-15、状態を CAN で取得する項目から独自定義にし、msg / srv を vesc_can_msgs に統合しました
+F1TENTH からコピーした vesc_msgs と VescStateStamped は廃止しました
+VescState は stamp を直接持ち、値の名前に単位を付けています
+常に未取得だった avg_id / avg_iq / ntc_temp_mos1〜3 / avg_vd / avg_vq / distance_traveled を削除しました
+整数のタコメータには tachometer_fresh を追加し、故障コードは応答値 0〜255 と未取得値 -1 を保持する int16 です
+
+ROS 2 Lyrical / rmw_fastrtps_cpp、隔離した ROS_DOMAIN_ID=179 で **58 ケースが成功** しました
+colcon test-result は実行単位 5 件を含む **63 tests, 0 errors, 0 failures, 0 skipped** です
+
+| 検証 | 結果 |
+|---|---|
+| vesc_can_msgs だけを先にビルド | 成功、ドライバへの依存なし |
+| 外部 C++ / Python から指令・状態・再起動型をシリアライズ | 成功 |
+| 生成インターフェースの列挙 | VescCommand / VescCommandArray / VescState / Reboot の 4 型 |
+| ドライバ単体の依存ビルド | 成功、vesc_can_msgs と vesc_can_driver の 2 パッケージ |
+| ros2_control までのビルド | 成功、計 3 パッケージ |
+| STATUS1〜5 の状態変換・欠測値・各 STATUS の期限切れ | 成功 |
+| int32 最大 ERPM と最小タコメータ値、故障コード 255 の保持 | 成功 |
+| 通常ノードと hardware plugin の新しい VescState 受信 | 成功、配信時刻も確認 |
+| 即時の異常通知、故障コードの反映、再起動と旧指令の破棄 | 成功 |
+| インストール済み公開 CMake target の外部利用 | ビルド・実行成功 |
+
+模擬構成で、CAN 動作指令は各モータ約 100 Hz、VescState と JointState は約 50 Hz でした
+ros2_control の state interface は controller_manager の 100 Hz 設定を維持しています
+故障イベントのテストは、サービス応答待ち中も指令を更新し、指令期限切れが先に起きない形にしました
+状態配信を 2000 ms にしたテストでも、故障イベントは周期配信を待たずに届きます
+
+全 C++ の clang-format、Python の Black、package.xml と文書のローカルリンク、git diff --check も確認しました
+ソースは読み取り専用でマウントし、ビルド・検証用の出力はリポジトリ外に置きました
+今回の動作検証は模擬 CAN で、実 CAN バス・モータ・Zenoh pico での確認は実施していません

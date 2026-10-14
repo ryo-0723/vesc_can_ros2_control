@@ -20,8 +20,7 @@ from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import Float64MultiArray
 from vesc_can_msgs.srv import Reboot
-from vesc_can_msgs.msg import VescCommand, VescCommandArray
-from vesc_msgs.msg import VescStateStamped
+from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescState
 
 
 @pytest.mark.launch_test
@@ -193,8 +192,9 @@ class IntegrationTest(unittest.TestCase):
         self.joint_times.append(time.monotonic())
 
     def observe_vesc_state(self, msg):
-        self.vesc_states[msg.state.controller_id] = msg.state
-        self.vesc_times.setdefault(msg.state.controller_id, []).append(time.monotonic())
+        self.assertGreater(msg.stamp.sec, 0)
+        self.vesc_states[msg.controller_id] = msg
+        self.vesc_times.setdefault(msg.controller_id, []).append(time.monotonic())
 
     def measure_rates(self, action):
         next_cmd = time.monotonic()
@@ -228,11 +228,11 @@ class IntegrationTest(unittest.TestCase):
                 return True
         return False
 
-    def request(self, service_type, name, request):
+    def request(self, service_type, name, request, action=None):
         client = self.node.create_client(service_type, name)
-        self.assertTrue(client.wait_for_service(timeout_sec=10.0), name)
+        self.assertTrue(self.wait_for(client.service_is_ready, timeout=10.0, action=action), name)
         future = client.call_async(request)
-        self.assertTrue(self.wait_for(future.done), name)
+        self.assertTrue(self.wait_for(future.done, action=action), name)
         response = future.result()
         self.node.destroy_client(client)
         return response
@@ -250,7 +250,7 @@ class IntegrationTest(unittest.TestCase):
         self.node.create_subscription(JointState, "/joint_states", self.observe_joints, 10)
         for name in ("drive_joint", "steer_joint", "current_joint", "hybrid_joint"):
             self.node.create_subscription(
-                VescStateStamped,
+                VescState,
                 "/VescFourModes_can_io/motors/" + name + "/state",
                 self.observe_vesc_state,
                 10,
@@ -309,7 +309,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(
             self.wait_for(lambda: len(self.vesc_states) == 4, action=publish_control_commands)
         )
-        self.assertAlmostEqual(self.vesc_states[12].current_motor, -1.5)
+        self.assertAlmostEqual(self.vesc_states[12].motor_current_a, -1.5)
         rate = self.request(
             GetParameters,
             "/controller_manager/get_parameters",
@@ -374,7 +374,7 @@ class IntegrationTest(unittest.TestCase):
 
         for motor_name in ["drive_joint", "steer_joint"]:
             self.node.create_subscription(
-                VescStateStamped,
+                VescState,
                 prefix + "/motors/" + motor_name + "/state",
                 self.observe_vesc_state,
                 10,
@@ -391,20 +391,19 @@ class IntegrationTest(unittest.TestCase):
         def motor_commands_applied():
             return (
                 set(self.vesc_states) == {11, 21}
-                and abs(self.vesc_states[11].speed - 134.0) < 1.0
-                and abs(self.vesc_states[21].pid_pos_now - math.degrees(0.25)) < 0.04
+                and abs(self.vesc_states[11].erpm - 134.0) < 1.0
+                and abs(self.vesc_states[21].pid_pos_deg - math.degrees(0.25)) < 0.04
                 and self.diagnostics.get("vesc_can_id_11", {}).get("status_6_fresh") == "true"
             )
 
         self.assertTrue(self.wait_for(motor_commands_applied, action=publish_motor_commands))
         self.assertEqual(self.node.count_publishers(prefix + "/joint_states"), 0)
         drive_state = self.vesc_states[11]
-        self.assertEqual(drive_state.voltage_input, 24.0)
-        self.assertEqual(drive_state.charge_drawn, 1.25)
-        self.assertEqual(drive_state.energy_drawn, 12.0)
+        self.assertEqual(drive_state.input_voltage_v, 24.0)
+        self.assertEqual(drive_state.charge_drawn_ah, 1.25)
+        self.assertEqual(drive_state.energy_drawn_wh, 12.0)
         self.assertEqual(drive_state.fault_code, 0)
-        self.assertEqual(drive_state.distance_traveled, -1)
-        self.assertTrue(math.isnan(drive_state.avg_id))
+        self.assertTrue(drive_state.tachometer_fresh)
         self.assertEqual(self.diagnostics["vesc_can_id_11"]["adc_1_v"], "1.100000")
         self.assertEqual(self.diagnostics["vesc_can_id_11"]["fault_code_fresh"], "true")
         self.measure_rates(publish_motor_commands)
@@ -417,8 +416,8 @@ class IntegrationTest(unittest.TestCase):
 
         self.assertTrue(
             self.wait_for(
-                lambda: abs(self.vesc_states[11].speed - 67.0) < 1.0
-                and abs(self.vesc_states[21].pid_pos_now - math.degrees(0.1)) < 0.04,
+                lambda: abs(self.vesc_states[11].erpm - 67.0) < 1.0
+                and abs(self.vesc_states[21].pid_pos_deg - math.degrees(0.1)) < 0.04,
                 action=publish_changed_commands,
             )
         )
@@ -451,8 +450,9 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(response.results[0].successful)
         self.assertTrue(
             self.wait_for(
-                lambda: math.isnan(self.vesc_states[11].speed)
-                and math.isnan(self.vesc_states[11].voltage_input)
+                lambda: math.isnan(self.vesc_states[11].erpm)
+                and math.isnan(self.vesc_states[11].input_voltage_v)
+                and not self.vesc_states[11].tachometer_fresh
                 and self.diagnostics.get("vesc_can_id_11", {}).get("status_5_fresh") == "false"
             ),
             "Missing feedback must invalidate telemetry without inventing device faults",
@@ -601,7 +601,7 @@ class IntegrationTest(unittest.TestCase):
         states = []
         self.node.create_subscription(DiagnosticArray, "/event_test/event", events.append, 10)
         self.node.create_subscription(
-            VescStateStamped,
+            VescState,
             "/event_test/vesc_can_ros2_control/motors/drive_joint/state",
             states.append,
             10,
@@ -658,7 +658,7 @@ class IntegrationTest(unittest.TestCase):
         self.node.create_subscription(Frame, "/rox_test/can/tx", self.observe_frame, 100)
         for name in ("upper_belt", "under_belt", "dribble"):
             self.node.create_subscription(
-                VescStateStamped,
+                VescState,
                 "/rox_test/vesc_can_ros2_control/motors/" + name + "/state",
                 self.observe_vesc_state,
                 10,
@@ -744,7 +744,7 @@ class IntegrationTest(unittest.TestCase):
         self.node.create_subscription(Frame, "/event_test/can/tx", self.observe_frame, 100)
         for name in ("drive_joint", "steer_joint"):
             self.node.create_subscription(
-                VescStateStamped,
+                VescState,
                 "/event_test/vesc_can_ros2_control/motors/" + name + "/state",
                 self.observe_vesc_state,
                 10,
@@ -753,16 +753,16 @@ class IntegrationTest(unittest.TestCase):
         cmd = self.make_commands(ids=[1, 2], values=[1.0, 0.1])
         send = lambda: cmd_pub.publish(cmd)
         reboot_srv = "/event_test/vesc_can_ros2_control/reboot"
-        self.assertTrue(
-            self.wait_for(
-                lambda: set(self.vesc_states) == {11, 21}
-                and all(state.fault_code == 0 for state in self.vesc_states.values()),
-                timeout=3.0,
-            )
+        healthy = self.wait_for(
+            lambda: set(self.vesc_states) == {11, 21}
+            and all(state.fault_code == 0 for state in self.vesc_states.values()),
+            timeout=5.0,  # Allow DDS discovery and two 2000 ms state cycles.
         )
+        self.assertTrue(healthy, f"Expected healthy CAN fault replies; states={self.vesc_states}")
         self.assertTrue(self.reboot(reboot_srv).success)
         self.assertTrue(self.wait_for(lambda: self.frames.get(11) == (3, 67), action=send))
         started = time.monotonic()
+        # Keep commands fresh while discovering and updating the fake fault service.
         response = self.request(
             SetParameters,
             "/fake_event_vesc/set_parameters",
@@ -780,6 +780,7 @@ class IntegrationTest(unittest.TestCase):
                     ),
                 ]
             ),
+            action=send,
         )
         self.assertTrue(all(result.successful for result in response.results))
         self.assertTrue(self.wait_for(lambda: len(events) == 1, timeout=0.5, action=send))

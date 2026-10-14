@@ -39,7 +39,7 @@ jobs:
             ws/src/vesc_can_ros2_control/vesc_can_driver/launch \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/launch \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test/test_integration.py
-      - name: Build command interfaces independently
+      - name: Build interfaces independently
         working-directory: ws
         run: |
           source /opt/ros/lyrical/setup.bash

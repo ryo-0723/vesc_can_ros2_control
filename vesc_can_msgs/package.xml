@@ -2,7 +2,7 @@
 <package format="3">
   <name>vesc_can_msgs</name>
   <version>0.1.0</version>
-  <description>Compact VESC motor command and reboot interfaces independent of the CAN driver.</description>
+  <description>Independent VESC CAN command, motor state and reboot interfaces.</description>
   <maintainer email="tengbenliang742@gmail.com">ryo-0723</maintainer>
   <license>MIT</license>
   <url type="repository">https://github.com/ryo-0723/vesc_can_ros2_control</url>

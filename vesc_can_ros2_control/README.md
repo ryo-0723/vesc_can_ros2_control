@@ -98,10 +98,10 @@ plugin は `vesc_can_driver::CanTransport` を利用します。送受信トピ�
 | CAN 指令の送信（各モータ） | 100 Hz | hardware の `send_period_ms: 10` |
 | state interface の更新・controller 実行 | 100 Hz | controller_manager の `update_rate: 100` |
 | `/joint_states` の配信 | 50 Hz | joint_state_broadcaster の `update_rate: 50` |
-| 各モータの `VescStateStamped` の配信 | 50 Hz | hardware の `state_publish_period_ms: 20` |
+| 各モータの `VescState` の配信 | 50 Hz | hardware の `state_publish_period_ms: 20` |
 
 state interface を直接読むオドメトリ controller は 100 Hz の更新を使えます。
-`VescStateStamped` は CAN 用 executor の状態タイマーで配信し、read/write では生成・配信しません。
+`VescState` は CAN 用 executor の状態タイマーで配信し、read/write では生成・配信しません。
 配信先は `/<ros2_control の name>_can_io/motors/<joint名>/state` です。
 例の `VescFourModes` なら `/VescFourModes_can_io/motors/drive_joint/state` になります。
 namespace を付けた場合はこの先頭に追加されます。電流・温度・電圧などの生値と単位は
@@ -124,5 +124,5 @@ VescState.fault_code は未受信・期限切れに -1 を返します
 このパッケージでは hardware 設定の検査と、実際の controller_manager からの
 plugin 読み込み、駆動・操舵、フィードバック途絶時の全台停止を確認します。
 統合テストでは、別の CAN トピックを使う通常ノード・模擬 VESC も起動し、
-通常ノードの VescCommandArray 指令と vesc_msgs の状態出力を確認します
+通常ノードの VescCommandArray 指令と独自 VescState の状態出力を確認します
 通常ノードを hardware component の通信経路として使う構成ではありません

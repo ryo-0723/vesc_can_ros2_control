@@ -14,9 +14,9 @@
 公開ヘッダは `vesc_protocol.hpp`、`vesc_driver.hpp`、`vesc_state.hpp` の 3 個です。
 通常ノードは実行ファイルなので公開ヘッダを持ちません。
 `vesc_system.hpp` は別パッケージの hardware plugin のヘッダです。
-通常ノードの指令定義は独立した `vesc_can_msgs/msg/VescCommand.msg` と `VescCommandArray.msg` に置きます
-上位ノードはドライバ本体に依存せず指令型を使えます
-F1TENTH 由来の `vesc_msgs` には独自の指令型を追加しません
+独自 msg / srv は独立した `vesc_can_msgs` にまとめます
+`msg/` は VescCommand、VescCommandArray、VescState、`srv/` は Reboot の定義です
+上位ノードはドライバ本体に依存せず、指令・状態・再起動の型を使えます
 
 ## 共用する範囲
 
@@ -82,13 +82,14 @@ STATUS と指令の受信時刻は `std::optional<TimePoint>` です。
 `steady_now` は期限判定、`stamp` はメッセージに付ける ROS 時刻です。
 通常ノードの指令は `/vesc/commands` の VescCommandArray に統一しています
 logical_id は通常ノードで保持し、共通の MotorConfig には CAN の controller_id だけを渡します
-ROS 設定キー、state トピック名、interface 名、上流メッセージの項目名は維持しています
+ROS 設定キー、state トピック名、interface 名は維持しています
+VescState は取得する CAN 生値から独自定義にし、項目名に単位を付けています
 通常ノードの control_mode / command_interface は起動後の変更を拒否します
 
 ## 周期と終了処理
 
-CAN 指令は各モータ 100 Hz、VescStateStamped は両入口で 50 Hz です
-通常ノードは VescStateStamped と診断を配信します
+CAN 指令は各モータ 100 Hz、VescState は両入口で 50 Hz です
+通常ノードは VescState と診断を配信します
 JointState は ros2_control の joint_state_broadcaster が 50 Hz で配信します
 ros2_control の state interface は controller_manager の 100 Hz で更新します。
 CAN と ROS 状態は独立したタイマーで扱い、モータごとのスレッドは追加しません。
@@ -113,8 +114,7 @@ hardware plugin はその後に状態タイマーと publisher を破棄しま�
 ros2_control 側のテストは hardware 設定と両入口の統合動作を検査します。
 
 `config`、`launch`、`urdf` はインストール後の起動例に必要です。
-`vesc_msgs` は F1TENTH 由来の VescState / VescStateStamped の 2 定義で、IMU は含めません。
-ライセンス原本はルートの MIT と `vesc_msgs/LICENSE` の BSD の 2 個です。
-各ドライバパッケージにはルートの MIT 原本をインストールします。
-指令用 vesc_can_msgs も同じ MIT 原本をインストールします
+独自インターフェースの `vesc_can_msgs` と両ドライバの計 3 パッケージです
+F1TENTH の msg と同梱 `vesc_msgs` は廃止しました
+ライセンス原本はルートの MIT 1 個で、3 パッケージの share へインストールします
 ビルド出力と Python キャッシュは `.gitignore` で除外します。

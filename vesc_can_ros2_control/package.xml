@@ -30,7 +30,6 @@
   <test_depend>diagnostic_msgs</test_depend>
   <test_depend>sensor_msgs</test_depend>
   <test_depend>std_msgs</test_depend>
-  <test_depend>vesc_msgs</test_depend>
   <test_depend>controller_manager_msgs</test_depend>
   <test_depend>rcl_interfaces</test_depend>
   <export><build_type>ament_cmake</build_type></export>

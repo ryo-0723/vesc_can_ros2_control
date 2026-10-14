@@ -35,7 +35,7 @@ CAN current [A] = command [A] × direction
 ros2_control の `current` 状態も `direction` を適用したモータ A です。
 以前はこの state interface が VESC 生値の符号でした。`direction=-1` の利用者は
 今回から状態の符号も反転する点を確認してください。
-通常ノードの `VescStateStamped.state.current_motor` は VESC 生値の A を保持します。
+通常ノードの `VescState.motor_current_a` は VESC 生値の A を保持します。
 これはモータ電流で、トルク定数や減速機効率を使うトルク換算は行いません。
 `max_current_a` は本ドライバが送る電流指令の上限で、速度 PID が出す電流の制限を
 VESC に設定する機能ではありません。実際の電流制限は VESC 側にも設定します。

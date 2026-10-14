@@ -14,7 +14,7 @@ VESC のネイティブ CAN フレームを encode/decode するライブラリ�
 |---|---|---|
 | vesc_can_driver::protocol | vesc_can_driver/vesc_protocol.hpp | 動作指令・故障問い合わせの encode、STATUS1〜6・故障応答の decode |
 | vesc_can_driver::driver | vesc_can_driver/vesc_driver.hpp | モータ設定・状態、4 モードの制御、CAN の周期送受信、専用 executor と最新指令の受け渡し |
-| vesc_can_driver::state | vesc_can_driver/vesc_state.hpp | VescState への変換とモータごとの VescStateStamped 配信を両入口で共用 |
+| vesc_can_driver::state | vesc_can_driver/vesc_state.hpp | VescState への変換とモータごとの VescState 配信を両入口で共用 |
 
 encode/decode だけを使う場合は protocol target にリンクします。このライブラリは
 ROS ノードや executor を起動せず、rclcpp や hardware_interface にリンクしません。
@@ -79,7 +79,7 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 | /vesc/event | diagnostic_msgs/msg/DiagnosticArray | 異常を検出した処理から即時通知、全台停止の理由 |
 | ~/reboot | vesc_can_msgs/srv/Reboot | motor_id に論理 ID を指定し、対応する 1 台を再起動 |
 | /diagnostics | diagnostic_msgs/msg/DiagnosticArray | 接続・有効状態・ドライバ異常 |
-| ~/motors/<motor_name>/state | vesc_msgs/msg/VescStateStamped | 上流定義のモータ生値。speed は ERPM、pid_pos_now はモータ PID 角度 [deg] |
+| ~/motors/<motor_name>/state | vesc_can_msgs/msg/VescState | 配信時刻 stamp とモータ生値、erpm は電気的 RPM、pid_pos_deg はモータ PID 角度 [deg] |
 
 `VescCommandArray.commands` の各要素は `uint8 motor_id / float32 value` です
 配列の順序は `motors` の登録順と違っても使えます
@@ -93,11 +93,11 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 未登録 ID、ID の重複、NaN/Inf、範囲外の指令は全台停止になります
 `command_topic` と `error_topic` でトピック名を設定できます
 
-`VescStateStamped` は関節単位へ変換する前の VESC 値を配信します
+`VescState` は関節単位へ変換する前の VESC 値を配信します
 状態の購読先は `~/motors/<motor_name>/state` で選びます
-`state.controller_id` は実機の識別・診断用として残しますが、上位ノードの振り分けには不要です
+`controller_id` は実機の識別・診断用として残しますが、上位ノードの振り分けには不要です
 
-通常ノードの状態出力は VescStateStamped と診断です
+通常ノードの状態出力は VescState と診断です
 関節状態は ros2_control の state interface から取得し、トピックが必要なら
 joint_state_broadcaster が `/joint_states` を配信します
 
@@ -109,8 +109,8 @@ ros2 topic echo /vesc_can_ros2_control/motors/drive_joint/state
 
 旧 ActuatorTarget / ActuatorState、SetPosition.srv は廃止しました
 通常ノードの旧 Float64 / JointState / MotorCommands 指令は VescCommandArray に統一しました
-指令型は独立した vesc_can_msgs に移動しています
-上位パッケージは vesc_can_msgs に依存すれば指令型を使えます
+指令・状態・再起動サービスの型は独立した vesc_can_msgs にまとめています
+上位パッケージは vesc_can_msgs に依存すればこれらの型を使えます
 C++ / Python の利用例は [vesc_can_msgs](../vesc_can_msgs/README.md) を参照してください
 状態値の取得範囲、未取得値、旧 API の移行は [メッセージ対応表](../docs/messages.md) を参照してください。
 通常ノードの CAN 指令は `update_period_ms` (既定 10 ms、各モータ 100 Hz)、
@@ -144,7 +144,7 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 必要なフィードバックが揃うと、指令だけで動作を開始します
 旧 rox2026 の target は機械 RPM ですが、新 API の速度は関節 rad/s です
 CAN 指令は 10 ms、状態は 20 ms とし、旧コードの 25 ms / 500 ms から変更しています
-状態は従来どおりモータ名ごとの VescStateStamped で、旧 ActuatorStateArray は生成しません
+状態は従来どおりモータ名ごとの VescState で、旧 ActuatorStateArray は生成しません
 
 rox2026 の /socketcan_bridge/vesc/rx には STATUS1 と故障応答を通すフィルタを設定します
 host_can_id=254 の例は `00000900:9FFFFF00,000008FE:9FFFFFFF` です
@@ -286,7 +286,7 @@ STATUS の送信元時刻は検証していません。DDS/Zenoh/CAN キュー�
 
 このパッケージのテストは native フレームの既知値、符号、DLC、ID、単位変換、
 複数台のフィードバック、タイムアウト、異常の保持・解除、独立 executor、
-vesc_msgs の単位と未取得値を確認します。
+独自 VescState の単位・未取得値・タコメータの鮮度を確認します
 通常ノードと hardware plugin を実際に起動する統合テストは
 `vesc_can_ros2_control` のテストにあります。
 

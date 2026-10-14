@@ -234,9 +234,6 @@ private:
     add_freshness("fault_code_fresh", state.fault_at);
     add_diagnostic_value(msg, "fault_code",
       std::to_string(feedback_fresh(state.fault_at, steady_now, timeout) ? state.fault_code : -1));
-    add_diagnostic_value(msg, "unavailable_vesc_fields",
-      "avg_id,avg_iq,ntc_temp_mos1,ntc_temp_mos2,ntc_temp_mos3,avg_vd,avg_vq,"
-      "distance_traveled");
     const bool status_6_fresh = feedback_fresh(state.status6_at, steady_now, timeout);
     add_diagnostic_value(
       msg, "adc_1_v", std::to_string(status_6_fresh ? state.adc_1_v : kUnknownValue));

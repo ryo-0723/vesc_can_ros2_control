@@ -4,10 +4,9 @@
 
 | パッケージ | 内容 | 他のパッケージとの関係 |
 |---|---|---|
-| vesc_can_msgs | 論理 ID と指令値、生成時刻を持つ配列の指令 msg | ドライバ・ros2_control・vesc_msgs への依存なし |
-| vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC、異常通知 | vesc_can_msgs / vesc_msgs を使用。ros2_control への依存なし |
+| vesc_can_msgs | 指令 msg、時刻付きの配列指令とモータ状態 msg、再起動 srv | ドライバ・ros2_control への依存なし |
+| vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC、異常通知 | vesc_can_msgs を使用、ros2_control への依存なし |
 | vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の driver / state を使用 |
-| vesc_msgs | 上流由来の ROS メッセージ | 両ドライバとは独立したインターフェース定義 |
 
 `vesc_can_driver::protocol` は encode/decode だけの公開 CMake target です。
 `vesc_can_driver::driver` はモータ設定・単位変換・状態更新・4 モードの指令処理と
@@ -57,7 +56,7 @@ VescSystem は実行ファイルではなく、controller_manager のプロセ�
 上位ノード向けの指令入口は `/vesc/commands` の VescCommandArray 1 つです
 各要素に論理 motor_id と float32 の value、配列全体に生成時刻 stamp を入れます
 モードは起動時の YAML から決まり、指令や起動後のパラメータ変更で切り替えません
-上位ノードは vesc_can_msgs にだけ依存して指令型を使えます
+上位ノードは vesc_can_msgs にだけ依存して指令・状態・再起動の型を使えます
 状態は `~/motors/<motor_name>/state` から購読します
 モータ名・logical_id・VESC の controller_id の対応は設定に集約し、上位ノードには CAN ID を要求しません
 ros2_control とモータ名を揃えれば、両入口で同じ関節を識別できます
@@ -130,13 +129,13 @@ ros2_control の ActuatorInterface があり、USB/UART 接続では有用な候
 本実装は同プロジェクトのコードをコピーせず、CAN 境界を共有する構成を採用します。
 
 通常ノードと hardware plugin は、共通の `MotorStatePublisher` でモータごとの
-`vesc_msgs/msg/VescStateStamped` を 50 Hz で配信します。1 つの状態タイマーで全台を処理し、
+`vesc_can_msgs/msg/VescState` を 50 Hz で配信します。1 つの状態タイマーで全台を処理し、
 通常ノードではメイン executor、hardware plugin では既存の CAN executor が実行します。
 モータごとのノードやスレッドは追加しません。ros2_control の read/write は 100 Hz で
 state interface と指令を受け渡し、メッセージの生成・配信は行いません。
 関節状態は state interface から取得し、joint_state_broadcaster が `/joint_states` を
 50 Hz で配信します
-通常ノードの状態出力は VescStateStamped と診断です
+通常ノードの状態出力は VescState と診断です
 [controller_manager の公式仕様](https://control.ros.org/master/doc/ros2_control/controller_manager/doc/userdoc.html#parameters)
 でも、manager の update_rate は hardware の read / controller の update / hardware の write の周期です。
 CAN 送信は両方の入口で各モータ 100 Hz です。例えば 4 台の指令は合計 400 frames/s になります。

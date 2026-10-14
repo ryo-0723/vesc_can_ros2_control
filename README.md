@@ -10,9 +10,9 @@ have different hardware APIs and have not been validated. The C++ library explic
 requires C++20, matching the Lyrical dependencies. This is a development
 package; no ROS apt release or physical-hardware validation is claimed.
 
-Local validation (2026-10-14): Lyrical build and all 57 test cases passed with
+Local validation (2026-10-15): Lyrical build and all 58 test cases passed with
 `rmw_fastrtps_cpp`, including standalone and ros2_control integration tests.
-Installed C++ library and command message usage also passed.
+Installed C++ library and independent command/state message usage also passed.
 See the [validation report](docs/validation.md). The physical CAN bus
 and Zenoh pico gateway have not been exercised.
 
@@ -21,9 +21,9 @@ Motor modes: `current` (motor A signed in the joint direction), `velocity` (join
 Both standalone and ros2_control use the same driver functions for all four modes.
 
 Default rates: CAN commands are sent at 100 Hz per motor; ros2_control state interfaces
-update at 100 Hz. Per-motor VescStateStamped topics publish at 50 Hz in both frontends.
+update at 100 Hz. Per-motor VescState topics publish at 50 Hz in both frontends.
 JointState publishes at 50 Hz through ros2_control's joint_state_broadcaster.
-The standalone node publishes VescStateStamped and diagnostics.
+The standalone node publishes VescState and diagnostics.
 Fresh commands start control automatically; `~/reboot` takes a logical motor ID and
 sends COMM_REBOOT once to that VESC. Stored commands are cleared before recovery.
 VESC fault codes are queried over CAN at 10 Hz; both frontends publish detected faults
@@ -36,8 +36,10 @@ See the [rate settings](vesc_can_ros2_control/README.md#更新と状態配信の
 - [Source layout and file responsibilities (日本語)](docs/source-layout.md)
 - [Motor control modes, units and stop behavior (日本語)](docs/motor-modes.md)
 - [Release preparation](docs/releasing.md)
-- State telemetry uses the bundled upstream `vesc_msgs/msg/VescStateStamped`.
-  Standalone commands use `vesc_can_msgs/msg/VescCommandArray` with logical IDs, float32 values and a generation timestamp.
+- All project-owned messages and services are defined in `vesc_can_msgs`:
+  VescCommand, timestamped VescCommandArray, timestamped VescState and Reboot.
+  VescState contains values received from CAN, with explicit units and freshness handling.
+  Standalone commands use logical IDs and float32 values.
   ros2_control joint state uses standard ROS messages. The CAN boundary uses `can_msgs/msg/Frame`.
 - [Message mapping and migration (日本語)](docs/messages.md)
 
@@ -56,21 +58,20 @@ colcon test --packages-select vesc_can_driver vesc_can_ros2_control
 colcon test-result --verbose
 ```
 
-The repository contains four ROS packages:
+The repository contains three ROS packages:
 
 | Package | Purpose |
 |---|---|
-| `vesc_can_msgs` | Independent command and reboot interfaces: VescCommand, timestamped VescCommandArray and Reboot |
+| `vesc_can_msgs` | Independent command, state and reboot interfaces; no driver dependency |
 | `vesc_can_driver` | Native CAN encode/decode, common driver and transport, standalone node and fake VESC |
 | `vesc_can_ros2_control` | Multi-joint hardware plugin, control launch and URDF/controller examples; depends on `vesc_can_driver` |
-| `vesc_msgs` | State-only subset: two message definitions copied from a pinned f1tenth ROS 2 revision |
 
 To use the CAN codec or standalone node without ros2_control, build only its
 dependency chain:
 
 ```bash
 rosdep install --from-paths src/vesc_can_ros2_control/vesc_can_driver \
-  src/vesc_can_ros2_control/vesc_msgs src/vesc_can_ros2_control/vesc_can_msgs \
+  src/vesc_can_ros2_control/vesc_can_msgs \
   --ignore-src -r -y --rosdistro lyrical
 colcon build --packages-up-to vesc_can_driver --cmake-args -DBUILD_TESTING=ON
 source install/setup.bash
@@ -80,13 +81,11 @@ colcon test --packages-select vesc_can_driver
 The reusable codec target is `vesc_can_driver::protocol`; see its
 [C++ usage example](vesc_can_driver/README.md#ライブラリとして使う).
 No extra VESC repository checkout is needed.
-Upstream command producers can depend only on `vesc_can_msgs`; see its
+Command producers and state subscribers can depend only on `vesc_can_msgs`; see its
 [C++ and Python usage](vesc_can_msgs/README.md).
-Do not add a second source copy of `vesc_msgs` to the same workspace. Existing
-workspaces using the previous `dependencies.repos` should move the old
-`src/vesc_upstream` checkout outside `src` before rebuilding.
-See [upstream provenance](vesc_msgs/UPSTREAM.md) and
-[release preparation](docs/releasing.md) for the apt release policy.
+The state schema is independently defined for this CAN driver. It uses a direct
+`stamp` field and flat values; update subscribers that previously used
+`vesc_msgs/msg/VescStateStamped`. See the [message mapping](docs/messages.md).
 
 ## Code style
 
@@ -102,7 +101,7 @@ black --line-length 100 vesc_can_driver/launch vesc_can_ros2_control/launch \
   vesc_can_ros2_control/test/test_integration.py
 ```
 
-The standalone API uses VescCommandArray commands, upstream VescStateStamped and standard diagnostics; see the
+The standalone API uses VescCommandArray commands, VescState and standard diagnostics; see the
 [migration guide](docs/messages.md). C++ users must update the renamed identifiers:
 `ControlMode::Current`, `ControlMode::Velocity`, `ControlMode::Position`,
 and `ControlMode::CurrentVelocity`, `kPi`, `kUnknownValue`, the protocol's `k*Id` constants,
@@ -146,20 +145,8 @@ STATUS decoding is pinned to firmware 6.06, commit
 [native STATUS layout](docs/messages.md#vesc-firmware-6-の-status-形式).
 No VESC firmware source or sbgisen implementation is bundled.
 
-The `vesc_msgs` package is copied from
-[f1tenth/vesc](https://github.com/f1tenth/vesc/tree/153998df8545fe1781b975df88e411b4e71d4bfe/vesc_msgs).
-Only `VescState.msg` and `VescStateStamped.msg` are copied, with their contents
-unchanged. IMU messages are excluded. CMake and package metadata are maintained
-locally; this is a state-only subset of the upstream package.
-The upstream BSD-3-Clause license is preserved in [vesc_msgs/LICENSE](vesc_msgs/LICENSE);
-the repository's MIT license applies to the driver code.
-The message package also installs its license and provenance into `share/vesc_msgs`.
-The source revision and local additions are recorded in
-[vesc_msgs/UPSTREAM.md](vesc_msgs/UPSTREAM.md).
-
-License sources are limited to the root [LICENSE](LICENSE) (MIT for the driver)
-and [vesc_msgs/LICENSE](vesc_msgs/LICENSE) (BSD-3-Clause for the copied messages).
-The two driver packages and vesc_can_msgs install the root MIT license into their share directories.
+The command, state and reboot interfaces are independently defined in `vesc_can_msgs`.
+The copied F1TENTH state package has been removed; its definitions are not used by this driver.
+The root [LICENSE](LICENSE) is the MIT license for all three packages.
+Each package installs this original into its share directory.
 Keep the repository layout when building; their CMake install rules refer to `../LICENSE`.
-See [message dependency choices](docs/messages.md#コピーと-vcs-取得の使い分け)
-for the choice between vendoring and `vcs import`.
