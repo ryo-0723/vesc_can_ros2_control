@@ -1,7 +1,8 @@
 # vesc_can_msgs
 
 VESC CAN ドライバの独自 msg と srv をまとめたインターフェースパッケージです
-通常ノードと ros2_control は同じ状態型を使用します
+通常ノードは VescStateArray、ros2_control のモータ別トピックは VescState を使用します
+配列の各要素も同じ VescState です
 上位ノードは `vesc_can_msgs` に依存すれば指令・状態・再起動の型を使用でき、ドライバ本体への依存は不要です
 このパッケージのメッセージ依存は `builtin_interfaces` だけです
 
@@ -9,7 +10,8 @@ VESC CAN ドライバの独自 msg と srv をまとめたインターフェー�
 |---|---|
 | [msg/VescCommand](msg/VescCommand.msg) | 論理 motor_id と float32 value |
 | [msg/VescCommandArray](msg/VescCommandArray.msg) | 生成時刻 stamp と VescCommand[] commands |
-| [msg/VescState](msg/VescState.msg) | 配信時刻 stamp、CAN の controller_id、取得した状態値と故障コード |
+| [msg/VescState](msg/VescState.msg) | 配信時刻 stamp、motor_name、CAN の controller_id、状態値と故障コード |
+| [msg/VescStateArray](msg/VescStateArray.msg) | 配信時刻 stamp と全モータの VescState[] states |
 | [srv/Reboot](srv/Reboot.srv) | 論理 motor_id → bool success、string message |
 
 ## 指令と再起動
@@ -37,20 +39,27 @@ stamp を直接持つため、Stamped 型で包む必要はありません
 | STATUS2 | charge_drawn_ah、charge_regen_ah |
 | STATUS3 | energy_drawn_wh、energy_regen_wh |
 | STATUS4 | temp_fet_c、temp_motor_c、input_current_a、pid_pos_deg |
-| STATUS5 | tachometer_counts、tachometer_fresh、input_voltage_v |
+| STATUS5 | tachometer_counts、tachometer_fresh、position_rad、input_voltage_v |
 | selective 問い合わせ | fault_code |
 
 stamp は配信時刻で、すべての値の同時測定を表しません
 controller_id は CAN の機器 ID です
-購読先はモータ名ごとのトピックなので、上位ノードが CAN ID を指定する必要はありません
+通常ノードでは `/vesc/state` の states[] を motor_name で識別します
+ros2_control ではモータ名ごとのトピックで対象を選びます
+上位ノードの振り分けに CAN ID を使用する必要はありません
 erpm と pid_pos_deg は極対数・減速比・方向を適用する前のモータ生値です
-関節単位の状態は ros2_control の state interface から取得します
+position_rad は全モード共通の積算関節角度 [rad] です
+tachometer_counts × 2π / (6 × pole_pairs × gear_ratio) × direction で計算し、2π で折り返しません
+起動時の自動ゼロ合わせや、PID 用の zero_offset_rad は適用しません
+未受信・期限切れでは position_rad も NaN です
+ros2_control では位置制御以外の position state interface も同じ積算角を返します
+位置制御の position state interface は STATUS4 の PID 角度を使います
 
 未受信・期限切れの浮動値は NaN、fault_code は -1 です
 fault_code=0 は VESC が応答した「故障なし」を表します
 tachometer_counts は符号付き int32 の最終受信値を保持し、未受信時は 0 です
 現在のフィードバックとして使う場合は tachometer_fresh=true を確認します
-STATUS6 の ADC / PPM は診断に配信します
+STATUS6 の ADC / PPM は共通ドライバ内で保持します
 詳細は [メッセージ対応表](../docs/messages.md) を参照してください
 
 ## 利用例
@@ -66,22 +75,26 @@ target_link_libraries(my_node PRIVATE ${vesc_can_msgs_TARGETS})
 ```cpp
 #include "vesc_can_msgs/msg/vesc_command_array.hpp"
 #include "vesc_can_msgs/msg/vesc_state.hpp"
+#include "vesc_can_msgs/msg/vesc_state_array.hpp"
 #include "vesc_can_msgs/srv/reboot.hpp"
 ```
 
 ```python
-from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescState
+from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescStateArray
 
 cmd = VescCommandArray(
     stamp=node.get_clock().now().to_msg(),
     commands=[VescCommand(motor_id=10, value=2.0)],
 )
 
-def on_state(msg: VescState):
-    node.get_logger().info(f"ERPM={msg.erpm}, fault={msg.fault_code}")
+def on_state(msg: VescStateArray):
+    for state in msg.states:
+        node.get_logger().info(
+            f"{state.motor_name}: position={state.position_rad} rad, fault={state.fault_code}"
+        )
 
 state_sub = node.create_subscription(
-    VescState, "/vesc_can_ros2_control/motors/drive_joint/state", on_state, 10
+    VescStateArray, "/vesc/state", on_state, 10
 )
 ```
 

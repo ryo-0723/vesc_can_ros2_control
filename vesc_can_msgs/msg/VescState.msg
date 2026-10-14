@@ -1,7 +1,10 @@
 # ROS publication time; each CAN packet is received independently
 builtin_interfaces/Time stamp
 
-# Physical VESC CAN ID (0..254); select the motor by its named state topic
+# Configured motor/joint name; identifies an element of VescStateArray
+string motor_name
+
+# Physical VESC CAN ID (0..254), for device identification and diagnostics
 uint8 controller_id
 
 # STATUS1: native motor values before pole-pair, gear and direction conversion
@@ -27,6 +30,9 @@ float64 pid_pos_deg
 # The counter is usable as current feedback only when tachometer_fresh is true
 int32 tachometer_counts
 bool tachometer_fresh
+# Accumulated joint/output angle [rad], from STATUS5 in every control mode
+# Pole pairs, gear ratio and direction applied; no single-turn wrapping or auto-zero
+float64 position_rad
 float64 input_voltage_v
 
 # Selective CAN fault query: -1 unknown/expired, 0 healthy, positive firmware code

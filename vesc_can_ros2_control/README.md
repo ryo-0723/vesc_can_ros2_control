@@ -60,9 +60,36 @@ VescState の電流と duty_cycle は VESC 生値を保持します
 
 速度変換は `ERPM = joint_rad_s × 60/(2π) × gear_ratio × pole_pairs × direction`。
 STATUS5 のタコメータは 1 電気回転を 6 カウントとして関節位置へ変換します。
-これは起動後の相対位置で、絶対エンコーダではありません。VESC の再起動や
-タコメータの int32 境界で位置が飛ぶ場合があります。積算の連続化・リセット検出は未実装です。
+位置制御以外の `position` state interface はこの積算角 [rad] を返し、2π で折り返しません
+全モードの `VescState.position_rad` にも同じ換算式の積算角を配信します
 
+```text
+position_rad = tachometer_counts × 2π / (6 × pole_pairs × gear_ratio) × direction
+```
+
+オドメトリ controller は車輪の `position` state interface を直接取得できます
+車輪半径を r とすると、前回値からの移動距離は `Δs = r × (position_now − position_prev)` です
+初回は現在値を基準として保存し、左右輪などの差分からロボットの移動量を求めます
+必要な URDF 設定は次の通りです（VescSystem の各 joint 内）
+
+```xml
+<param name="control_mode">velocity</param>
+<param name="pole_pairs">7</param>
+<param name="gear_ratio">1.0</param>
+<param name="direction">1</param>
+<command_interface name="velocity"/>
+<state_interface name="position"/>
+<state_interface name="velocity"/>
+```
+
+この構成では STATUS5 が必須となり、未受信・期限切れでは有効化または制御を継続しません
+VESC の STATUS5 周期送信と CAN ブリッジの受信を有効にしてください
+state interface は 100 Hz で読み取り、測定値そのものの更新周期は STATUS5 の受信周期に従います
+積算角は VESC のタコメータ原点に基づく相対位置です。VESC の再起動や
+タコメータの int32 境界で位置が飛ぶ場合があります。積算の連続化・リセット検出は未実装です。
+再起動後はオドメトリ側の前回値を取り直して基準を合わせます
+
+位置制御モードの `position` state interface は STATUS4 を維持します
 操舵は `SET_POS` と STATUS4 の PID 角度を使用します。モータ側の単回転角度を
 関節角度へ変換するため、現在は許容範囲を `[-π/gear_ratio, π/gear_ratio]` 内に
 限定します。多回転減速機の出力軸の絶対位置やホーミングは未対応です。
@@ -127,5 +154,5 @@ VescState.fault_code は未受信・期限切れに -1 を返します
 このパッケージでは hardware 設定の検査と、実際の controller_manager からの
 plugin 読み込み、駆動・操舵、フィードバック途絶時の全台停止を確認します。
 統合テストでは、別の CAN トピックを使う通常ノード・模擬 VESC も起動し、
-通常ノードの VescCommandArray 指令と独自 VescState の状態出力を確認します
+通常ノードの VescCommandArray 指令と VescStateArray の状態出力を確認します
 通常ノードを hardware component の通信経路として使う構成ではありません

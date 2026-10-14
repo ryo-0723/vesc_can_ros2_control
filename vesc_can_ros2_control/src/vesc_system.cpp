@@ -302,9 +302,11 @@ double VescSystem::read_state_value(
     vesc_can_driver::feedback_fresh(state.status5_at, steady_now, timeout);
   switch (binding.field) {
     case StateField::Position: {
-      const bool pos_fresh =
-        cfg.mode == vesc_can_driver::ControlMode::Position ? status_4_fresh : status_5_fresh;
-      return pos_fresh ? state.pos_rad : vesc_can_driver::kUnknownValue;
+      if (cfg.mode == vesc_can_driver::ControlMode::Position) {
+        return status_4_fresh ? state.pos_rad : vesc_can_driver::kUnknownValue;
+      }
+      return status_5_fresh ? vesc_can_driver::tacho_to_pos(cfg, state.tachometer_counts)
+                            : vesc_can_driver::kUnknownValue;
     }
     case StateField::Velocity:
       return status_1_fresh ? state.vel_rad_s : vesc_can_driver::kUnknownValue;

@@ -23,6 +23,126 @@ protected:
     rclcpp::shutdown();
   }
 };
+
+TEST_F(TransportTest, PendingBatchesUseLatestValuesAndConcurrentUpdatesStayTogether)
+{
+  MotorConfig cfg;
+  cfg.name = "first";
+  cfg.controller_id = 11;
+  cfg.mode = ControlMode::Current;
+  cfg.command_timeout = 2s;
+  cfg.feedback_timeout = 2s;
+  auto second = cfg;
+  second.name = "second";
+  second.controller_id = 12;
+  TransportOptions opts;
+  opts.tx_topic = "/batch_test/tx";
+  opts.rx_topic = "/batch_test/rx";
+  opts.fault_period = 0ms;
+  opts.auto_activate = true;
+  auto peer = std::make_shared<rclcpp::Node>("batch_test_peer");
+  auto can_node = std::make_shared<rclcpp::Node>("batch_test_io");
+  auto feedback_pub =
+    peer->create_publisher<can_msgs::msg::Frame>(opts.rx_topic, rclcpp::SensorDataQoS());
+  std::vector<std::pair<std::int32_t, std::int32_t>> pairs;
+  std::int32_t first_value = 0;
+  auto sub = peer->create_subscription<can_msgs::msg::Frame>(
+    opts.tx_topic, 100, [&](can_msgs::msg::Frame::ConstSharedPtr frame) {
+      if ((frame->id >> 8) != 1) {
+        return;
+      }
+      const auto value = static_cast<std::int32_t>(
+        (std::uint32_t(frame->data[0]) << 24) | (std::uint32_t(frame->data[1]) << 16) |
+        (std::uint32_t(frame->data[2]) << 8) | frame->data[3]);
+      if ((frame->id & 255) == 11) {
+        first_value = value;
+      } else if ((frame->id & 255) == 12) {
+        pairs.emplace_back(first_value, value);
+      }
+    });
+  auto timer = peer->create_wall_timer(10ms, [&]() {
+    for (std::uint8_t id : {11, 12}) {
+      can_msgs::msg::Frame frame;
+      frame.id = 0x900 | id;
+      frame.is_extended = true;
+      frame.dlc = 8;
+      feedback_pub->publish(frame);
+    }
+  });
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(peer);
+  CanTransport transport({cfg, second}, opts, can_node);
+  const auto wait_for = [&](auto predicate, std::chrono::milliseconds timeout) {
+    const auto deadline = SteadyClock::now() + timeout;
+    while (SteadyClock::now() < deadline) {
+      exec.spin_some();
+      if (predicate()) {
+        return true;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+    return predicate();
+  };
+  ASSERT_TRUE(wait_for([&]() { return feedback_pub->get_subscription_count() > 0; }, 2s));
+  // No CAN executor is running yet, so none of these earlier values can be sent.
+  ASSERT_TRUE(transport.set_commands({{0, 1.0}, {1, 2.0}}));
+  ASSERT_TRUE(transport.set_commands({{0, 3.0}, {1, 4.0}}));
+  ASSERT_TRUE(transport.set_commands({{1, 5.0}}));
+  transport.start();
+  ASSERT_TRUE(
+    wait_for([&]() { return !pairs.empty() && pairs.back() == std::pair{3000, 5000}; }, 1s));
+  for (const auto &[first, second_value] : pairs) {
+    EXPECT_TRUE((first == 0 && second_value == 0) || (first == 3000 && second_value == 5000));
+  }
+  pairs.clear();
+  std::jthread writer([&](std::stop_token stop) {
+    const std::vector<MotorCommand> a{{0, 1.0}, {1, 2.0}};
+    const std::vector<MotorCommand> b{{0, 3.0}, {1, 4.0}};
+    while (!stop.stop_requested()) {
+      transport.set_commands(a);
+      transport.set_commands(b);
+      std::this_thread::yield();
+    }
+  });
+  wait_for([]() { return false; }, 250ms);
+  writer.request_stop();
+  writer.join();
+  ASSERT_GE(pairs.size(), 10u);
+  for (const auto &[first, second_value] : pairs) {
+    EXPECT_TRUE((first == 3000 && second_value == 5000) ||
+                (first == 1000 && second_value == 2000) || (first == 3000 && second_value == 4000));
+  }
+  EXPECT_FALSE(transport.faulted());
+}
+
+TEST_F(TransportTest, InvalidBatchStopsBeforeAnyElementIsCommitted)
+{
+  const std::vector<std::vector<MotorCommand>> invalid_batches{{{0, 1.0}, {1, kUnknownValue}},
+    {{0, 1.0}, {1, 11.0}}, {{0, 1.0}, {2, 2.0}}, {{0, 1.0}, {0, 2.0}}};
+  for (const auto &batch : invalid_batches) {
+    MotorConfig cfg;
+    cfg.name = "first";
+    cfg.controller_id = 11;
+    cfg.mode = ControlMode::Current;
+    auto second = cfg;
+    second.name = "second";
+    second.controller_id = 12;
+    TransportOptions opts;
+    opts.auto_activate = true;
+    auto node = std::make_shared<rclcpp::Node>("invalid_batch_io");
+    std::vector<DriverFault> faults;
+    CanTransport transport(
+      {cfg, second}, opts, node, [&](const DriverFault &fault) { faults.push_back(fault); });
+    ASSERT_TRUE(transport.set_commands({{0, 3.0}, {1, 4.0}}));
+    EXPECT_FALSE(transport.set_commands(batch));
+    EXPECT_TRUE(transport.faulted());
+    EXPECT_FALSE(transport.active());
+    EXPECT_FALSE(transport.set_commands({{0, 1.0}, {1, 2.0}}));
+    ASSERT_EQ(faults.size(), 1u);
+    EXPECT_FALSE(faults.front().reason.empty());
+  }
+}
+
 TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
 {
   MotorConfig cfg;
@@ -71,8 +191,8 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
     spin_peer_until([&]() { return can_transport.snapshot()[0].status1_at.has_value(); }, 2s));
   ASSERT_TRUE(can_transport.activate());
   // Multiple pending updates collapse to the latest value.
-  ASSERT_TRUE(can_transport.set_command(0, 1.0));
-  ASSERT_TRUE(can_transport.set_command(0, 2.0));
+  ASSERT_TRUE(can_transport.set_commands({{0, 1.0}}));
+  ASSERT_TRUE(can_transport.set_commands({{0, 2.0}}));
   ASSERT_TRUE(spin_peer_until(
     [&]() {
       for (const auto &frame : received_frames) {
@@ -85,7 +205,7 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
     80ms));
   ASSERT_TRUE(spin_peer_until([&]() { return can_transport.faulted(); }, 250ms));
   EXPECT_FALSE(can_transport.active());
-  EXPECT_FALSE(can_transport.set_command(0, 1.0));
+  EXPECT_FALSE(can_transport.set_commands({{0, 1.0}}));
   ASSERT_FALSE(can_transport.fault_reason().empty());
   ASSERT_TRUE(can_transport.activate());
   received_frames.clear();
@@ -113,8 +233,9 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
     300ms));
   ASSERT_TRUE(can_transport.activate());
   for (double invalid : {kUnknownValue, 1000.0}) {
-    EXPECT_FALSE(can_transport.set_command(0, invalid));
-    EXPECT_FALSE(can_transport.set_command(0, 1.0));  // A valid update cannot hide invalid input.
+    EXPECT_FALSE(can_transport.set_commands({{0, invalid}}));
+    EXPECT_FALSE(
+      can_transport.set_commands({{0, 1.0}}));  // A valid update cannot hide invalid input.
     ASSERT_TRUE(spin_peer_until([&]() { return can_transport.faulted(); }, 100ms));
     ASSERT_TRUE(can_transport.activate());
   }
@@ -172,7 +293,8 @@ TEST_F(TransportTest, DefaultTimerRepeatsOneCommandAt100Hz)
     std::this_thread::sleep_for(1ms);
   }
   ASSERT_TRUE(transport.activate());
-  ASSERT_TRUE(transport.set_command(0, 2.0));  // One input; the timer must keep transmitting it.
+  ASSERT_TRUE(
+    transport.set_commands({{0, 2.0}}));  // One input; the timer must keep transmitting it.
   deadline = SteadyClock::now() + 200ms;
   while (samples.empty() && SteadyClock::now() < deadline) {
     exec.spin_some();
@@ -259,7 +381,7 @@ TEST_F(TransportTest, FaultCallbackRunsOutsideStateLockWithoutWaitingForSendTime
   ASSERT_TRUE(
     wait_for([&]() { return transport.snapshot().front().status1_at.has_value(); }, 500ms));
   ASSERT_TRUE(transport.activate());
-  EXPECT_FALSE(transport.set_command(0, kUnknownValue));
+  EXPECT_FALSE(transport.set_commands({{0, kUnknownValue}}));
   EXPECT_EQ(fault_count(), 2u);  // Invalid non-RT input notifies directly in this call.
   EXPECT_TRUE(transport.faulted());
   EXPECT_NE(transport.fault_reason().find("invalid command"), std::string::npos);
@@ -448,8 +570,8 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
     }
     return predicate();
   };
-  ASSERT_TRUE(transport.set_command(0, 1.0));  // Input may precede initial feedback.
-  ASSERT_TRUE(transport.set_command(1, 2.0));
+  ASSERT_TRUE(transport.set_commands({{0, 1.0}}));  // Input may precede initial feedback.
+  ASSERT_TRUE(transport.set_commands({{1, 2.0}}));
   wait_for([]() { return false; }, 50ms);
   EXPECT_FALSE(transport.active());
   EXPECT_FALSE(transport.faulted());
@@ -474,7 +596,7 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
     },
     100ms));
   EXPECT_FALSE(transport.reboot(1));
-  EXPECT_FALSE(transport.set_command(1, 2.0));  // Boot guard discards commands and old STATUS.
+  EXPECT_FALSE(transport.set_commands({{1, 2.0}}));  // Boot guard discards commands and old STATUS.
   EXPECT_FALSE(transport.snapshot()[1].status1_at.has_value());
   wait_for([]() { return false; }, 600ms);
   EXPECT_TRUE(transport.snapshot()[1].status1_at.has_value());
@@ -487,8 +609,8 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
       EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{}));
     }
   }
-  ASSERT_TRUE(transport.set_command(0, 1.0));
-  ASSERT_TRUE(transport.set_command(1, 2.0));
+  ASSERT_TRUE(transport.set_commands({{0, 1.0}}));
+  ASSERT_TRUE(transport.set_commands({{1, 2.0}}));
   ASSERT_TRUE(wait_for([&]() { return transport.active(); }, 100ms));
 }
 

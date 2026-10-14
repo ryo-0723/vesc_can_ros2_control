@@ -3,6 +3,7 @@
     can_tx_topic: /bench/can/tx
     can_rx_topic: /bench/can/rx
     command_topic: /vesc/commands
+    state_topic: /vesc/state
     error_topic: /vesc/event
     host_can_id: 254
     fault_poll_period_ms: 100

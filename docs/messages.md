@@ -10,10 +10,10 @@
 |---|---|---|
 | CAN 境界 | can_msgs/msg/Frame | 元の CAN ID、フラグ、DLC、ペイロードを保持 |
 | モータ指令（通常ノード） | vesc_can_msgs/msg/VescCommandArray | 生成時刻と論理 ID・float32 指令値の配列、単位は A / 関節 rad / rad/s / duty 比 |
-| VESC 状態 | vesc_can_msgs/msg/VescState | モータ名ごとのトピック、controller_id は CAN の機器 ID |
+| VESC 状態（通常ノード） | vesc_can_msgs/msg/VescStateArray | /vesc/state、各要素の motor_name で識別 |
+| VESC 状態（ros2_control） | vesc_can_msgs/msg/VescState | モータ別のトピック、controller_id は CAN の機器 ID |
 | VESC 再起動（通常ノード） | vesc_can_msgs/srv/Reboot | motor_id は論理 ID、対応する 1 台を再起動 |
 | 関節状態（ros2_control） | sensor_msgs/msg/JointState | joint_state_broadcaster が state interface から配信 |
-| 接続・鮮度・ドライバ異常 | diagnostic_msgs/msg/DiagnosticArray | モータごとの hardware_id と key/value |
 | 即時の異常通知 | diagnostic_msgs/msg/DiagnosticArray | /vesc/event に VESC 故障コードまたは PC 側の停止理由を配信 |
 
 CAN と関節状態、診断は既存の標準型を使用します
@@ -24,7 +24,9 @@ CAN と関節状態、診断は既存の標準型を使用します
 1 つの通常ノードが `motors` に登録した全台を管理します
 ROS 側の数値 ID は `logical_id`、CAN の機器 ID は `controller_id` で管理します
 モータ一覧と、モータ名ごとの設定は rox2026 の YAML と同じ形です
-指令は `command_topic`（既定 `/vesc/commands`）、状態は `~/motors/<motor_name>/state` を使用します
+指令は `command_topic`（既定 `/vesc/commands`）、状態は `state_topic`（既定 `/vesc/state`）を使用します
+通常ノードの状態は VescStateArray で全モータをまとめ、異常だけ `/vesc/event` に即時通知します
+周期の `/diagnostics` は配信しません
 
 ```text
 # VescCommand
@@ -34,6 +36,10 @@ float32 value
 # VescCommandArray
 builtin_interfaces/Time stamp
 VescCommand[] commands
+
+# VescStateArray
+builtin_interfaces/Time stamp
+VescState[] states
 ```
 
 motor_id は設定の logical_id に対応し、0〜255 の範囲で重複させません
@@ -47,28 +53,41 @@ current_velocity でも value は関節速度 [rad/s] です
 未登録 ID、重複 ID、不正な指令値は全台停止になります
 stamp は送信側の ROS 生成時刻で、タイムアウトには受信側の単調時刻を使用します
 stamp が 0 の指令も受け付け、古い・未来の stamp によって指令期限を延長しません
+配列の全要素は同じ受信時刻で一括保存し、同じモータの未送信値は最新値で上書きします
+全要素を検査し、不正な要素があれば一部だけ送信することなく全台停止します
 
 ## VescState の対応範囲
 
 CAN レイアウトは [VESC firmware 6.06 の送信処理](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c) を基準にします
-通常モータ向けの STATUS1〜6 をデコードし、状態と診断に反映します
+通常モータ向けの STATUS1〜6 をデコードし、共通ドライバの状態に反映します
 故障コードは selective 問い合わせで取得します
 
 | 取得元 | VescState のフィールド | 配信する値 |
 |---|---|---|
 | ROS | stamp | 配信時刻 |
+| 設定 | motor_name | YAML のモータ名、hardware では joint 名 |
 | 設定 | controller_id | CAN の機器 ID、0〜254 |
 | STATUS1 | erpm / motor_current_a / duty_cycle | 生の ERPM、モータ電流 [A]、duty |
 | STATUS2 | charge_drawn_ah / charge_regen_ah | 積算電荷 [Ah] |
 | STATUS3 | energy_drawn_wh / energy_regen_wh | 積算電力量 [Wh] |
 | STATUS4 | temp_fet_c / temp_motor_c / input_current_a / pid_pos_deg | 温度 [℃]、入力電流 [A]、モータ PID 角度 [deg] |
-| STATUS5 | tachometer_counts / tachometer_fresh / input_voltage_v | 符号付きタコメータ [count]、STATUS5 の鮮度、入力電圧 [V] |
+| STATUS5 | tachometer_counts / tachometer_fresh / position_rad / input_voltage_v | 符号付きタコメータ [count]、STATUS5 の鮮度、積算関節角 [rad]、入力電圧 [V] |
 | COMM_GET_VALUES_SELECTIVE（bit 15） | fault_code | 本体の故障コード、正常応答は 0 |
 
-STATUS6 の ADC1〜3 [V] と PPM は /diagnostics に配信し、VescState には追加しません
+STATUS6 の ADC1〜3 [V] と PPM は共通ドライバ内で保持します
 erpm は極対数・減速比・方向を適用する前の値、pid_pos_deg も生のモータ PID 角度です
+position_rad は全モードで STATUS5 のカウントから計算する、変換後の積算関節角です
+
+```text
+position_rad = tachometer_counts × 2π / (6 × pole_pairs × gear_ratio) × direction
+```
+
+2π で折り返さず、PID 用の zero_offset_rad や起動時のゼロ合わせは適用しません
+例えば pole_pairs=7、gear_ratio=2、direction=-1、tachometer_counts=-168 なら 4π rad です
 ros2_control の state interface には変換後の関節単位を渡します
+位置制御以外の position state はこの積算角、位置制御では STATUS4 の単回転角です
 JointState は joint_state_broadcaster がこの interface から作成します
+motor_name と VescStateArray の追加後は、vesc_can_msgs と利用側を同じ定義で再ビルドします
 
 ### 時刻と欠測値
 
@@ -79,16 +98,17 @@ VescState は stamp を直接持ち、header や入れ子の state はありま�
 - 浮動値は float64、未受信・期限切れは NaN
 - tachometer_counts は int32、最終受信値を保持し、未受信時は 0
 - tachometer_fresh は STATUS5 が受信済みで期限内なら true
+- position_rad は STATUS5 の鮮度に従い、未受信・期限切れでは NaN
 - fault_code は int16、未受信・期限切れは -1、正常応答は 0、本体の故障は正のコード
 
 float64 により、CAN の符号付き int32 の ERPM をそのまま表現できます
 整数のタコメータを現在のフィードバックとして使う場合は tachometer_fresh=true を確認します
 故障コードは uint8 の応答値 0〜255 と未取得値 -1 を保持できます
-ドライバの通信途絶などは本体の故障番号へ変換せず、診断と /vesc/event に配信します
+ドライバの通信途絶などは本体の故障番号へ変換せず、/vesc/event に停止理由を配信します
 
 STATUS2/3/6 が未受信でも、モードに必要なフィードバックが揃えば制御を開始できます
 全 STATUS を同じ高頻度で送信する必要はありません
-他の STATUS の鮮度は診断の status_1_fresh〜status_6_fresh からも確認できます
+各 STATUS の浮動値は期限切れで NaN となり、STATUS5 のカウントは tachometer_fresh で判定できます
 
 ### 削除した未取得項目
 
@@ -152,7 +172,9 @@ Status1〜Status6 の構造体、宣言、関数定義をこの順序に揃え�
 
 ## 購読側の変更
 
-状態トピック名は `~/motors/<motor_name>/state` のままで、型を `vesc_can_msgs/msg/VescState` へ変更します
+通常ノードの状態購読は /vesc/state の vesc_can_msgs/msg/VescStateArray に変更します
+states[] の各要素を motor_name で識別します
+hardware のモータ別トピックは vesc_can_msgs/msg/VescState を使用します
 旧型の互換エイリアスはありません
 
 | 旧アクセス | 新アクセス |
@@ -170,4 +192,4 @@ Status1〜Status6 の構造体、宣言、関数定義をこの順序に揃え�
 | msg.state.fault_code | msg.fault_code、int16 に変更 |
 
 通常ノードの指令、再起動サービス、CAN の形式、ros2_control の state / command interface は同じです
-通常ノードの状態は VescState と診断を使用し、JointState は配信しません
+通常ノードは VescStateArray を周期配信し、異常を検出したときだけ /vesc/event に通知します

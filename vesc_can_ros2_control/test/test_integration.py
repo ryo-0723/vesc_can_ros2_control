@@ -20,7 +20,7 @@ from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import Float64MultiArray
 from vesc_can_msgs.srv import Reboot
-from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescState
+from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescState, VescStateArray
 
 
 @pytest.mark.launch_test
@@ -58,6 +58,7 @@ def generate_test_description():
                         "can_tx_topic": "/topic_test/can/tx",
                         "can_rx_topic": "/topic_test/can/rx",
                         "command_topic": "/topic_test/commands",
+                        "state_topic": "/topic_test/state",
                         "error_topic": "/topic_test/event",
                     },
                 ],
@@ -84,10 +85,10 @@ def generate_test_description():
                         "can_tx_topic": "/five_topic/can/tx",
                         "can_rx_topic": "/five_topic/can/rx",
                         "command_topic": "/five_topic/commands",
+                        "state_topic": "/five_topic/state",
                         "error_topic": "/five_topic/event",
                     },
                 ],
-                remappings=[("/diagnostics", "/five_topic/diagnostics")],
             ),
             Node(
                 package="vesc_can_driver",
@@ -107,11 +108,11 @@ def generate_test_description():
                         "can_tx_topic": "/event_test/can/tx",
                         "can_rx_topic": "/event_test/can/rx",
                         "command_topic": "/event_test/commands",
+                        "state_topic": "/event_test/state",
                         "error_topic": "/event_test/event",
                         "state_publish_period_ms": 2000,
                     },
                 ],
-                remappings=[("/diagnostics", "/event_test/diagnostics")],
             ),
             Node(
                 package="vesc_can_driver",
@@ -135,10 +136,10 @@ def generate_test_description():
                         "can_tx_topic": "/rox_test/can/tx",
                         "can_rx_topic": "/rox_test/can/rx",
                         "command_topic": "/rox_test/commands",
+                        "state_topic": "/rox_test/state",
                         "error_topic": "/rox_test/event",
                     },
                 ],
-                remappings=[("/diagnostics", "/rox_test/diagnostics")],
             ),
             launch_testing.actions.ReadyToTest(),
         ]
@@ -161,7 +162,8 @@ class IntegrationTest(unittest.TestCase):
         self.frame_history = []
         self.joints = None
         self.vesc_states = {}
-        self.diagnostics = {}
+        self.state_array = None
+        self.array_times = []
         self.frame_times = {}
         self.joint_times = []
         self.vesc_times = {}
@@ -196,6 +198,16 @@ class IntegrationTest(unittest.TestCase):
         self.vesc_states[msg.controller_id] = msg
         self.vesc_times.setdefault(msg.controller_id, []).append(time.monotonic())
 
+    def observe_state_array(self, msg):
+        self.assertGreater(msg.stamp.sec, 0)
+        self.assertEqual(len({state.motor_name for state in msg.states}), len(msg.states))
+        for state in msg.states:
+            self.assertTrue(state.motor_name)
+            self.assertEqual(state.stamp, msg.stamp)
+            self.observe_vesc_state(state)
+        self.state_array = msg
+        self.array_times.append(time.monotonic())
+
     def measure_rates(self, action):
         next_cmd = time.monotonic()
         # Drain queued callbacks first, then measure one second with a monotonic clock.
@@ -204,6 +216,7 @@ class IntegrationTest(unittest.TestCase):
             self.frame_times.clear()
             self.joint_times.clear()
             self.vesc_times.clear()
+            self.array_times.clear()
             deadline = time.monotonic() + duration
             while time.monotonic() < deadline:
                 if time.monotonic() >= next_cmd:
@@ -262,9 +275,10 @@ class IntegrationTest(unittest.TestCase):
         )
         hybrid_pub = self.node.create_publisher(Float64MultiArray, "/hybrid_controller/commands", 1)
         duty_pub = self.node.create_publisher(Float64MultiArray, "/duty_controller/commands", 1)
+        drive_cmd = 2.0
 
         def publish_control_commands():
-            vel_pub.publish(Float64MultiArray(data=[2.0]))
+            vel_pub.publish(Float64MultiArray(data=[drive_cmd]))
             pos_pub.publish(Float64MultiArray(data=[0.25]))
             current_pub.publish(Float64MultiArray(data=[1.5]))
             hybrid_pub.publish(Float64MultiArray(data=[2.0]))
@@ -315,6 +329,12 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertAlmostEqual(self.vesc_states[12].motor_current_a, -1.5)
         self.assertAlmostEqual(self.vesc_states[41].duty_cycle, -0.25)
+        for id, direction in ((11, 1), (21, 1), (12, -1), (31, 1), (41, -1)):
+            state = self.vesc_states[id]
+            self.assertTrue(state.tachometer_fresh)
+            self.assertAlmostEqual(
+                state.position_rad, state.tachometer_counts * math.tau / 42 * direction
+            )
         rate = self.request(
             GetParameters,
             "/controller_manager/get_parameters",
@@ -326,6 +346,47 @@ class IntegrationTest(unittest.TestCase):
             self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
             self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
         self.assert_rate(self.joint_times, 50, "JointState")
+
+        def drive_position():
+            return self.joints.position[self.joints.name.index("drive_joint")]
+
+        def stopped_with_matching_position():
+            joint_index = self.joints.name.index("drive_joint")
+            return (
+                abs(self.joints.velocity[joint_index]) < 0.01
+                and self.vesc_states[11].erpm == 0
+                and abs(drive_position() - self.vesc_states[11].position_rad) < 1e-8
+            )
+
+        # The actual hardware position interface must preserve multiple revolutions.
+        drive_cmd = 10.0
+        self.assertTrue(
+            self.wait_for(
+                lambda: drive_position() > math.tau
+                and self.vesc_states[11].position_rad > math.tau,
+                action=publish_control_commands,
+            ),
+            "Wheel position must accumulate beyond one revolution",
+        )
+        drive_cmd = 0.0
+        self.assertTrue(
+            self.wait_for(stopped_with_matching_position, action=publish_control_commands)
+        )
+        forward_pos = drive_position()
+        drive_cmd = -10.0
+        self.assertTrue(
+            self.wait_for(
+                lambda: drive_position() < forward_pos - math.tau
+                and self.vesc_states[11].position_rad < forward_pos - math.tau,
+                action=publish_control_commands,
+            ),
+            "Reverse wheel motion must decrease the accumulated position",
+        )
+        drive_cmd = 0.0
+        self.assertTrue(
+            self.wait_for(stopped_with_matching_position, action=publish_control_commands)
+        )
+        drive_cmd = 2.0
         response = self.request(
             SetParameters,
             "/fake_control_vesc/set_parameters",
@@ -377,20 +438,9 @@ class IntegrationTest(unittest.TestCase):
         prefix = "/topic_test/vesc_can_ros2_control"
         self.node.create_subscription(Frame, "/topic_test/can/tx", self.observe_frame, 100)
 
-        def observe_diagnostics(msg):
-            self.diagnostics = {
-                status.hardware_id: {field.key: field.value for field in status.values}
-                for status in msg.status
-            }
-
-        for motor_name in ["drive_joint", "steer_joint"]:
-            self.node.create_subscription(
-                VescState,
-                prefix + "/motors/" + motor_name + "/state",
-                self.observe_vesc_state,
-                10,
-            )
-        self.node.create_subscription(DiagnosticArray, "/diagnostics", observe_diagnostics, 10)
+        self.node.create_subscription(
+            VescStateArray, "/topic_test/state", self.observe_state_array, 10
+        )
         cmd_pub = self.node.create_publisher(
             VescCommandArray, prefix.rsplit("/", 1)[0] + "/commands", 10
         )
@@ -404,7 +454,6 @@ class IntegrationTest(unittest.TestCase):
                 set(self.vesc_states) == {11, 21}
                 and abs(self.vesc_states[11].erpm - 134.0) < 1.0
                 and abs(self.vesc_states[21].pid_pos_deg - math.degrees(0.25)) < 0.04
-                and self.diagnostics.get("vesc_can_id_11", {}).get("status_6_fresh") == "true"
             )
 
         self.assertTrue(self.wait_for(motor_commands_applied, action=publish_motor_commands))
@@ -415,12 +464,28 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(drive_state.energy_drawn_wh, 12.0)
         self.assertEqual(drive_state.fault_code, 0)
         self.assertTrue(drive_state.tachometer_fresh)
-        self.assertEqual(self.diagnostics["vesc_can_id_11"]["adc_1_v"], "1.100000")
-        self.assertEqual(self.diagnostics["vesc_can_id_11"]["fault_code_fresh"], "true")
+        self.assertAlmostEqual(
+            drive_state.position_rad, drive_state.tachometer_counts * math.tau / 42
+        )
+        steer_state = self.vesc_states[21]
+        self.assertAlmostEqual(
+            steer_state.position_rad, steer_state.tachometer_counts * math.tau / 42
+        )
+        self.assertEqual(
+            [state.motor_name for state in self.state_array.states], ["drive_joint", "steer_joint"]
+        )
+        self.assertEqual(self.node.count_publishers(prefix + "/motors/drive_joint/state"), 0)
+        self.assertFalse(
+            any(
+                info.node_name == "vesc_can_ros2_control"
+                for info in self.node.get_publishers_info_by_topic("/diagnostics")
+            )
+        )
         self.measure_rates(publish_motor_commands)
         for id in (11, 21):
             self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
             self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
+        self.assert_rate(self.array_times, 50, "VescStateArray (all motors)")
 
         def publish_changed_commands():
             cmd_pub.publish(self.make_commands(ids=[1, 2], values=[1.0, 0.1]))
@@ -463,8 +528,8 @@ class IntegrationTest(unittest.TestCase):
             self.wait_for(
                 lambda: math.isnan(self.vesc_states[11].erpm)
                 and math.isnan(self.vesc_states[11].input_voltage_v)
+                and math.isnan(self.vesc_states[11].position_rad)
                 and not self.vesc_states[11].tachometer_fresh
-                and self.diagnostics.get("vesc_can_id_11", {}).get("status_5_fresh") == "false"
             ),
             "Missing feedback must invalidate telemetry without inventing device faults",
         )
@@ -620,8 +685,8 @@ class IntegrationTest(unittest.TestCase):
         states = []
         self.node.create_subscription(DiagnosticArray, "/event_test/event", events.append, 10)
         self.node.create_subscription(
-            VescState,
-            "/event_test/vesc_can_ros2_control/motors/drive_joint/state",
+            VescStateArray,
+            "/event_test/state",
             states.append,
             10,
         )
@@ -675,13 +740,9 @@ class IntegrationTest(unittest.TestCase):
 
     def test_07_rox2026_yaml_maps_logical_ids_to_can_ids(self):
         self.node.create_subscription(Frame, "/rox_test/can/tx", self.observe_frame, 100)
-        for name in ("upper_belt", "under_belt", "dribble"):
-            self.node.create_subscription(
-                VescState,
-                "/rox_test/vesc_can_ros2_control/motors/" + name + "/state",
-                self.observe_vesc_state,
-                10,
-            )
+        self.node.create_subscription(
+            VescStateArray, "/rox_test/state", self.observe_state_array, 10
+        )
         cmd_pub = self.node.create_publisher(VescCommandArray, "/rox_test/commands", 10)
         self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
         reboot_srv = "/rox_test/vesc_can_ros2_control/reboot"
@@ -757,19 +818,11 @@ class IntegrationTest(unittest.TestCase):
 
     def test_09_can_device_fault_publishes_numeric_code_and_latches_stop(self):
         events = []
-        diagnostics = []
-        self.node.create_subscription(
-            DiagnosticArray, "/event_test/diagnostics", diagnostics.append, 10
-        )
         self.node.create_subscription(DiagnosticArray, "/event_test/event", events.append, 10)
         self.node.create_subscription(Frame, "/event_test/can/tx", self.observe_frame, 100)
-        for name in ("drive_joint", "steer_joint"):
-            self.node.create_subscription(
-                VescState,
-                "/event_test/vesc_can_ros2_control/motors/" + name + "/state",
-                self.observe_vesc_state,
-                10,
-            )
+        self.node.create_subscription(
+            VescStateArray, "/event_test/state", self.observe_state_array, 10
+        )
         cmd_pub = self.node.create_publisher(VescCommandArray, "/event_test/commands", 10)
         cmd = self.make_commands(ids=[1, 2], values=[1.0, 0.1])
         send = lambda: cmd_pub.publish(cmd)
@@ -823,16 +876,6 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: self.frames == {11: (1, 0), 21: (1, 0)}, action=send))
         self.assertTrue(self.wait_for(lambda: self.vesc_states[21].fault_code == 4, timeout=3.0))
         self.assertEqual(self.vesc_states[11].fault_code, 0)
-        self.assertTrue(
-            self.wait_for(
-                lambda: diagnostics
-                and any(
-                    status.hardware_id == "vesc_can_id_21" and "VESC fault_code=4" in status.message
-                    for status in diagnostics[-1].status
-                ),
-                timeout=1.0,
-            )
-        )
         self.wait_for(lambda: False, timeout=0.25)
         self.assertEqual(len(events), 1)  # Identical fault replies are not repeated events.
         response = self.request(
@@ -889,7 +932,7 @@ class IntegrationTest(unittest.TestCase):
         prefix = "/five_topic/vesc_can_ros2_control"
         self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         self.node.create_subscription(
-            VescState, prefix + "/motors/duty_joint/state", self.observe_vesc_state, 10
+            VescStateArray, "/five_topic/state", self.observe_state_array, 10
         )
         cmd_pub = self.node.create_publisher(VescCommandArray, "/five_topic/commands", 10)
         self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))

@@ -455,6 +455,50 @@ TEST(Core, ConvertsJointUnitsAndUsesMeasuredTachometer)
   EXPECT_NEAR(deg_to_pos(cfg, 0.0), kPi / 4, 1e-9);
 }
 
+TEST(Core, TachometerConversionKeepsSignedMultiTurnJointAngles)
+{
+  auto cfg = make_motor_config();  // Seven pole pairs: 42 counts per motor revolution.
+  EXPECT_DOUBLE_EQ(tacho_to_pos(cfg, 0), 0.0);
+  EXPECT_NEAR(tacho_to_pos(cfg, 42), 2.0 * kPi, 1e-9);
+  EXPECT_NEAR(tacho_to_pos(cfg, -84), -4.0 * kPi, 1e-9);
+  cfg.gear_ratio = 2.0;
+  cfg.direction = -1.0;
+  cfg.zero_offset_rad = kPi / 2;  // The PID origin does not change the tachometer origin.
+  EXPECT_NEAR(tacho_to_pos(cfg, -168), 4.0 * kPi, 1e-9);
+  cfg.pole_pairs = 3.0;
+  EXPECT_NEAR(tacho_to_pos(cfg, 72), -4.0 * kPi, 1e-9);
+}
+
+TEST(Core, NonPositionModesUseTachometerAndKeepAngleAcrossControlActivation)
+{
+  const auto now = TimePoint(1s);
+  for (auto mode : {ControlMode::Current, ControlMode::Velocity, ControlMode::CurrentVelocity,
+         ControlMode::DutyCycle}) {
+    SCOPED_TRACE(command_interface(mode));
+    auto cfg = make_motor_config();
+    cfg.mode = mode;
+    cfg.require_tachometer = true;
+    if (mode == ControlMode::CurrentVelocity) {
+      cfg.startup_current_a = 2.0;
+    }
+    DriverCore core({cfg});
+    ASSERT_TRUE(core.receive(make_status_1_frame(), now));
+    auto feedback = make_status_5_frame();
+    feedback.data = {0, 0, 0, 84, 0, 240, 0, 0};  // Two complete motor revolutions.
+    ASSERT_TRUE(core.receive(feedback, now));
+    EXPECT_NEAR(core.states()[0].pos_rad, 4.0 * kPi, 1e-9);
+    ASSERT_TRUE(core.activate(now));
+    core.deactivate();
+    ASSERT_TRUE(core.activate(now));
+    EXPECT_NEAR(core.states()[0].pos_rad, 4.0 * kPi, 1e-9);
+    ASSERT_TRUE(core.receive(make_status_4_frame(11), now));
+    EXPECT_NEAR(core.states()[0].pos_rad, 4.0 * kPi, 1e-9);
+    feedback.data = {255, 255, 255, 214, 0, 240, 0, 0};  // Reverse past the original zero.
+    ASSERT_TRUE(core.receive(feedback, now));
+    EXPECT_NEAR(core.states()[0].pos_rad, -2.0 * kPi, 1e-9);
+  }
+}
+
 TEST(Core, ReceivesStatusWhileControlIsDisabledOrFaulted)
 {
   auto cfg = make_motor_config();

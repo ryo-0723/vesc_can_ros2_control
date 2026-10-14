@@ -1,4 +1,5 @@
-#include <algorithm>
+#include <array>
+#include <bitset>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -6,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "vesc_can_driver/vesc_driver.hpp"
 #include "vesc_can_driver/vesc_state.hpp"
 #include "vesc_can_msgs/msg/vesc_command_array.hpp"
@@ -15,8 +15,6 @@
 namespace vesc_can_driver
 {
 using VescCommandArray = vesc_can_msgs::msg::VescCommandArray;
-using DiagnosticStatus = diagnostic_msgs::msg::DiagnosticStatus;
-using DiagnosticArray = diagnostic_msgs::msg::DiagnosticArray;
 using Reboot = vesc_can_msgs::srv::Reboot;
 
 class VescNode : public rclcpp::Node
@@ -25,6 +23,7 @@ public:
   /// @brief パラメータを読み込み、通信・指令受付・状態配信を起動する
   VescNode() : rclcpp::Node("vesc_can_ros2_control")
   {
+    motor_idx_.fill(-1);
     TransportOptions opts;
     opts.tx_topic = declare_parameter<std::string>("can_tx_topic", "/socketcan_bridge/tx");
     opts.rx_topic = declare_parameter<std::string>("can_rx_topic", "/socketcan_bridge/rx");
@@ -52,6 +51,8 @@ public:
     for (const auto &motor_name : names) {
       configs_.push_back(load_motor_config(motor_name));
     }
+    cmds_.reserve(configs_.size());
+    states_.resize(configs_.size());
     initialize_command_interfaces();
     initialize_state_publishers(state_period);
     initialize_can_transport(opts);
@@ -65,8 +66,7 @@ private:
     MotorConfig cfg;
     cfg.name = motor_name;
     const auto motor_id = declare_parameter<std::int64_t>(prefix + "logical_id", -1);
-    if (motor_id < 0 || motor_id > 255 ||
-        std::find(motor_ids_.begin(), motor_ids_.end(), motor_id) != motor_ids_.end()) {
+    if (motor_id < 0 || motor_id > 255 || motor_idx_[motor_id] >= 0) {
       throw std::invalid_argument(motor_name + ": logical ID must be unique and in [0, 255]");
     }
     const auto controller_id = declare_parameter<std::int64_t>(prefix + "controller_id", -1);
@@ -108,7 +108,7 @@ private:
     cfg.command_timeout = std::chrono::milliseconds(
       declare_parameter<std::int64_t>(prefix + "command_timeout_ms", 500));
     cfg.require_tachometer = declare_parameter<bool>(prefix + "require_tachometer", false);
-    motor_ids_.push_back(static_cast<std::uint8_t>(motor_id));
+    motor_idx_[motor_id] = static_cast<int>(configs_.size());
     return cfg;
   }
 
@@ -131,13 +131,13 @@ private:
       cmd_topic, 10, [this](VescCommandArray::ConstSharedPtr msg) { handle_commands(*msg); });
     reboot_srv_ = create_service<Reboot>(
       "~/reboot", [this](Reboot::Request::SharedPtr request, Reboot::Response::SharedPtr response) {
-        const auto id = std::find(motor_ids_.begin(), motor_ids_.end(), request->motor_id);
-        if (id == motor_ids_.end()) {
+        const auto motor_idx = motor_idx_[request->motor_id];
+        if (motor_idx < 0) {
           response->success = false;
           response->message = "Unknown logical motor ID: " + std::to_string(request->motor_id);
           return;
         }
-        const auto idx = static_cast<std::size_t>(id - motor_ids_.begin());
+        const auto idx = static_cast<std::size_t>(motor_idx);
         response->success = transport_->reboot(idx);
         response->message = response->success ? "Reboot queued for " + configs_[idx].name +
                                                   "; wait for fresh feedback and send new commands"
@@ -145,137 +145,52 @@ private:
       });
   }
 
-  /// @brief VescState・診断の publisher と周期タイマーを作る
+  /// @brief 状態配列と異常通知の publisher，状態の周期タイマーを作る
   void initialize_state_publishers(std::chrono::milliseconds period)
   {
     const auto error_topic = declare_parameter<std::string>("error_topic", "/vesc/event");
-    state_pub_ = std::make_unique<MotorStatePublisher>(*this, configs_, error_topic);
-    diag_pub_ = create_publisher<DiagnosticArray>("/diagnostics", 10);
+    const auto state_topic = declare_parameter<std::string>("state_topic", "/vesc/state");
+    state_pub_ = std::make_unique<MotorStatePublisher>(*this, configs_, error_topic, state_topic);
     state_timer_ = create_wall_timer(period, [this]() { publish_states(); });
   }
 
-  /// @brief 論理 ID・指令値を検査し、起動時に設定したモードの最新指令へ渡す
+  /// @brief 論理 ID を検査し，指令配列をまとめて最新値の保存領域へ渡す
   /// @note 一部のモータだけ指定でき、未指定モータの指令期限は更新しない
   /// @note msg.stamp は送信側の生成時刻，期限判定には受信側の単調時刻を使う
   void handle_commands(const VescCommandArray &msg)
   {
-    std::vector<std::size_t> motor_indices;
-    motor_indices.reserve(msg.commands.size());
+    cmds_.clear();
+    std::bitset<256> seen;
     for (const auto &cmd : msg.commands) {
-      const auto id_it = std::find(motor_ids_.begin(), motor_ids_.end(), cmd.motor_id);
-      if (id_it == motor_ids_.end()) {
-        transport_->stop_on_error("Unknown logical motor ID: " + std::to_string(cmd.motor_id));
-        return;
-      }
-      const auto motor_idx = static_cast<std::size_t>(id_it - motor_ids_.begin());
-      const auto &cfg = configs_[motor_idx];
-      if (std::find(motor_indices.begin(), motor_indices.end(), motor_idx) != motor_indices.end()) {
+      const auto motor_idx = motor_idx_[cmd.motor_id];
+      if (motor_idx < 0 || seen.test(cmd.motor_id)) {
         transport_->stop_on_error(
-          cfg.name + ": duplicate logical ID " + std::to_string(cmd.motor_id));
+          "Unknown or duplicate logical motor ID: " + std::to_string(cmd.motor_id));
         return;
       }
-      if (!command_is_valid(cfg, cmd.value)) {
-        transport_->stop_on_error(
-          cfg.name + ": invalid command value " + std::to_string(cmd.value));
-        return;
-      }
-      motor_indices.push_back(motor_idx);
+      seen.set(cmd.motor_id);
+      cmds_.push_back({static_cast<std::size_t>(motor_idx), cmd.value});
     }
-    for (std::size_t cmd_idx = 0; cmd_idx < motor_indices.size(); ++cmd_idx) {
-      transport_->set_command(motor_indices[cmd_idx], msg.commands[cmd_idx].value);
-    }
+    transport_->set_commands(cmds_);
   }
 
-  /// @brief 診断メッセージへキーと値を追加する
-  static void add_diagnostic_value(
-    DiagnosticStatus &msg, const std::string &key, const std::string &value)
-  {
-    diagnostic_msgs::msg::KeyValue field;
-    field.key = key;
-    field.value = value;
-    msg.values.push_back(field);
-  }
-
-  /// @brief 準備・動作許可・異常と STATUS の鮮度を診断メッセージにまとめる
-  DiagnosticStatus make_diagnostic_status(const MotorConfig &cfg, std::uint8_t motor_id,
-    const MotorState &state, TimePoint steady_now, bool ready, bool active, bool faulted,
-    const std::string &fault_reason) const
-  {
-    DiagnosticStatus msg;
-    msg.name = std::string(get_namespace()) + "/vesc/" + cfg.name;
-    msg.hardware_id = "vesc_can_id_" + std::to_string(cfg.controller_id);
-    if (faulted) {
-      msg.level = DiagnosticStatus::ERROR;
-      msg.message = fault_reason;
-    } else if (!ready) {
-      msg.level = DiagnosticStatus::ERROR;
-      msg.message = "Required feedback missing/stale or position out of range";
-    } else if (active) {
-      msg.level = DiagnosticStatus::OK;
-      msg.message = "Commanding";
-    } else {
-      msg.level = DiagnosticStatus::WARN;
-      msg.message = "Waiting for commands";
-    }
-    const auto timeout = cfg.feedback_timeout;
-    const auto add_freshness = [&](const std::string &key,
-                                 const std::optional<TimePoint> &received_at) {
-      const bool fresh = feedback_fresh(received_at, steady_now, timeout);
-      add_diagnostic_value(msg, key, fresh ? "true" : "false");
-    };
-    add_freshness("status_1_fresh", state.status1_at);
-    add_freshness("status_2_fresh", state.status2_at);
-    add_freshness("status_3_fresh", state.status3_at);
-    add_freshness("status_4_fresh", state.status4_at);
-    add_freshness("status_5_fresh", state.status5_at);
-    add_freshness("status_6_fresh", state.status6_at);
-    add_diagnostic_value(msg, "active", active ? "true" : "false");
-    add_diagnostic_value(msg, "logical_id", std::to_string(motor_id));
-    add_diagnostic_value(msg, "driver_faulted", faulted ? "true" : "false");
-    add_freshness("fault_code_fresh", state.fault_at);
-    add_diagnostic_value(msg, "fault_code",
-      std::to_string(feedback_fresh(state.fault_at, steady_now, timeout) ? state.fault_code : -1));
-    const bool status_6_fresh = feedback_fresh(state.status6_at, steady_now, timeout);
-    add_diagnostic_value(
-      msg, "adc_1_v", std::to_string(status_6_fresh ? state.adc_1_v : kUnknownValue));
-    add_diagnostic_value(
-      msg, "adc_2_v", std::to_string(status_6_fresh ? state.adc_2_v : kUnknownValue));
-    add_diagnostic_value(
-      msg, "adc_3_v", std::to_string(status_6_fresh ? state.adc_3_v : kUnknownValue));
-    add_diagnostic_value(msg, "ppm", std::to_string(status_6_fresh ? state.ppm : kUnknownValue));
-    return msg;
-  }
-
-  /// @brief 最新状態を取得し、VescState・診断を周期配信する
+  /// @brief 確保済みの領域へ最新状態を取得し，状態だけを周期配信する
   void publish_states()
   {
-    const auto states = transport_->snapshot();
-    const auto steady_now = SteadyClock::now();
-    const auto stamp = now();
-    state_pub_->publish(states, steady_now, stamp);
-    const bool active = transport_->active();
-    const bool faulted = transport_->faulted();
-    const auto fault_reason = faulted ? transport_->fault_reason() : std::string{};
-    DiagnosticArray diag_msg;
-    diag_msg.header.stamp = stamp;
-    for (std::size_t motor_idx = 0; motor_idx < configs_.size(); ++motor_idx) {
-      const auto &cfg = configs_[motor_idx];
-      const auto &state = states[motor_idx];
-      const bool ready = state_ready(cfg, state, steady_now);
-      diag_msg.status.push_back(make_diagnostic_status(
-        cfg, motor_ids_[motor_idx], state, steady_now, ready, active, faulted, fault_reason));
-    }
-    diag_pub_->publish(diag_msg);
+    // On lock contention, retain the snapshot and continue applying packet expiry checks.
+    transport_->try_snapshot(states_);
+    state_pub_->publish(states_, SteadyClock::now(), now());
   }
 
   std::vector<MotorConfig> configs_;
-  std::vector<std::uint8_t> motor_ids_;
+  std::array<int, 256> motor_idx_;
+  std::vector<MotorCommand> cmds_;
+  std::vector<MotorState> states_;
   // The transport joins its callbacks before the state/error publishers are destroyed.
   std::unique_ptr<MotorStatePublisher> state_pub_;
   std::unique_ptr<CanTransport> transport_;
   rclcpp::Subscription<VescCommandArray>::SharedPtr cmd_sub_;
   rclcpp::Service<Reboot>::SharedPtr reboot_srv_;
-  rclcpp::Publisher<DiagnosticArray>::SharedPtr diag_pub_;
   rclcpp::TimerBase::SharedPtr state_timer_;
 };
 }  // namespace vesc_can_driver

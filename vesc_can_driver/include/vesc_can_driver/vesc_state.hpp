@@ -5,13 +5,14 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "vesc_can_driver/vesc_driver.hpp"
 #include "vesc_can_msgs/msg/vesc_state.hpp"
+#include "vesc_can_msgs/msg/vesc_state_array.hpp"
 
 namespace vesc_can_driver
 {
 constexpr std::int16_t kUnknownFaultCode = -1;
 
-/// @brief 取得可能な VESC 生値を独自の VescState メッセージへ変換
-/// @param cfg モータ ID とフィードバック期限を持つ設定
+/// @brief VESC 生値と STATUS5 由来の積算関節角度を VescState へ変換
+/// @param cfg モータ ID・単位変換・フィードバック期限を持つ設定
 /// @param state 最終受信状態
 /// @param now 鮮度判定に使う単調時刻
 /// @note 欠測・期限切れの浮動値は NaN，故障コードは -1
@@ -24,10 +25,11 @@ vesc_can_msgs::msg::VescState make_vesc_state(
 class MotorStatePublisher
 {
 public:
-  /// @brief 各モータの状態と共通の異常通知用 publisher を作成
+  /// @brief 状態と異常通知用 publisher を作成する
   /// @param error_topic 異常検出時に通知するトピック
+  /// @param state_topic 全台の配列を配信するトピック，空ならモータ別に配信する
   MotorStatePublisher(rclcpp::Node &node, const std::vector<MotorConfig> &configs,
-    const std::string &error_topic = "/vesc/event");
+    const std::string &error_topic = "/vesc/event", const std::string &state_topic = "");
   /// @brief 全モータの VescState を同じ ROS 時刻で配信
   /// @param states 設定と同じ順序の状態配列
   /// @param now 鮮度判定に使う単調時刻
@@ -41,6 +43,8 @@ public:
 private:
   std::vector<MotorConfig> configs_;
   std::vector<rclcpp::Publisher<vesc_can_msgs::msg::VescState>::SharedPtr> pubs_;
+  rclcpp::Publisher<vesc_can_msgs::msg::VescStateArray>::SharedPtr array_pub_;
+  vesc_can_msgs::msg::VescStateArray state_msg_;
   rclcpp::Clock::SharedPtr clock_;
   std::string node_name_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr error_pub_;

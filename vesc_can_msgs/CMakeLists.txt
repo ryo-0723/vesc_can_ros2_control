@@ -9,6 +9,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/VescCommand.msg"
   "msg/VescCommandArray.msg"
   "msg/VescState.msg"
+  "msg/VescStateArray.msg"
   "srv/Reboot.srv"
   DEPENDENCIES builtin_interfaces
 )

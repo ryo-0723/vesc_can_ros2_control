@@ -54,6 +54,7 @@ TEST(StateConversion, NativeValuesKeepMotorUnitsAndControllerIdentity)
   const auto &state = core.states().front();
   const auto msg = make_vesc_state(cfg, state, received_at);
   EXPECT_EQ(msg.controller_id, 11);
+  EXPECT_EQ(msg.motor_name, "drive_joint");
   EXPECT_DOUBLE_EQ(msg.erpm, 420.0);  // Raw ERPM, despite reversed gearing.
   EXPECT_NEAR(state.vel_rad_s, -kPi, 1e-9);
   EXPECT_DOUBLE_EQ(msg.motor_current_a, 1.5);
@@ -65,6 +66,7 @@ TEST(StateConversion, NativeValuesKeepMotorUnitsAndControllerIdentity)
   EXPECT_DOUBLE_EQ(msg.input_voltage_v, 24.0);
   EXPECT_EQ(msg.tachometer_counts, -42);
   EXPECT_TRUE(msg.tachometer_fresh);
+  EXPECT_NEAR(msg.position_rad, kPi, 1e-9);  // Reversed 2:1 gearing, unlike native fields.
   EXPECT_DOUBLE_EQ(msg.charge_drawn_ah, 1.25);
   EXPECT_DOUBLE_EQ(msg.charge_regen_ah, 0.5);
   EXPECT_DOUBLE_EQ(msg.energy_drawn_wh, 12.0);
@@ -79,7 +81,8 @@ TEST(StateConversion, MissingValuesAndDeviceFaultAreNeverReportedAsHealthyZeros)
   const auto msg = make_vesc_state(cfg, MotorState{}, TimePoint(1s));
   const std::array unavailable_values = {msg.erpm, msg.motor_current_a, msg.input_current_a,
     msg.temp_fet_c, msg.temp_motor_c, msg.duty_cycle, msg.input_voltage_v, msg.charge_drawn_ah,
-    msg.charge_regen_ah, msg.energy_drawn_wh, msg.energy_regen_wh, msg.pid_pos_deg};
+    msg.charge_regen_ah, msg.energy_drawn_wh, msg.energy_regen_wh, msg.pid_pos_deg,
+    msg.position_rad};
   for (double value : unavailable_values) {
     EXPECT_TRUE(std::isnan(value));
   }
@@ -100,6 +103,7 @@ TEST(StateConversion, NativeSignedCountersAndErpmRemainExact)
   EXPECT_DOUBLE_EQ(msg.erpm, std::numeric_limits<std::int32_t>::max());
   EXPECT_EQ(msg.tachometer_counts, std::numeric_limits<std::int32_t>::min());
   EXPECT_TRUE(msg.tachometer_fresh);
+  EXPECT_TRUE(std::isfinite(msg.position_rad));
 }
 
 TEST(StateConversion, DeviceFaultCodesRequireFreshRepliesAndKeepUnknownCodes)
@@ -136,6 +140,40 @@ TEST(StateConversion, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForCo
   EXPECT_TRUE(std::isnan(msg.energy_drawn_wh));
   EXPECT_EQ(msg.tachometer_counts, -42);  // Last count is retained with explicit freshness.
   EXPECT_FALSE(msg.tachometer_fresh);
+  EXPECT_TRUE(std::isnan(msg.position_rad));
+}
+
+TEST(StateConversion, AccumulatedAngleUsesStatus5InEveryModeAndExpiresIndependently)
+{
+  const auto now = TimePoint(1s);
+  for (auto mode : {ControlMode::Current, ControlMode::Velocity, ControlMode::Position,
+         ControlMode::DutyCycle, ControlMode::CurrentVelocity}) {
+    SCOPED_TRACE(command_interface(mode));
+    auto cfg = state_conversion_config();
+    cfg.mode = mode;
+    cfg.min_pos_rad = -1.0;
+    cfg.max_pos_rad = 1.0;
+    cfg.zero_offset_rad = kPi / 2;
+    if (mode == ControlMode::CurrentVelocity) {
+      cfg.startup_current_a = 2.0;
+    }
+    DriverCore core({cfg});
+    // No STATUS1/4 is needed to decode and publish the measured accumulated angle.
+    ASSERT_TRUE(core.receive(status_frame(27, {255, 255, 255, 88, 0, 240, 0, 0}), now));
+    EXPECT_NEAR(make_vesc_state(cfg, core.states()[0], now).position_rad, 4.0 * kPi, 1e-9);
+    ASSERT_TRUE(core.receive(status_frame(16, {1, 44, 1, 54, 0, 12, 17, 148}), now + 1ms));
+    const auto msg = make_vesc_state(cfg, core.states()[0], now + 200ms);
+    EXPECT_NEAR(msg.position_rad, 4.0 * kPi, 1e-9);
+    EXPECT_DOUBLE_EQ(msg.pid_pos_deg, 90.0);
+    if (mode == ControlMode::Position) {
+      EXPECT_NEAR(core.states()[0].pos_rad, 0.0, 1e-9);  // PID feedback keeps its own origin.
+    }
+    const auto stale = make_vesc_state(cfg, core.states()[0], now + 201ms);
+    EXPECT_TRUE(std::isnan(stale.position_rad));
+    EXPECT_FALSE(stale.tachometer_fresh);
+    EXPECT_DOUBLE_EQ(stale.pid_pos_deg, 90.0);  // A fresh STATUS4 cannot refresh STATUS5.
+    EXPECT_TRUE(std::isnan(make_vesc_state(cfg, core.states()[0], now - 1ms).position_rad));
+  }
 }
 }  // namespace
 }  // namespace vesc_can_driver

@@ -10,7 +10,7 @@ have different hardware APIs and have not been validated. The C++ library explic
 requires C++20, matching the Lyrical dependencies. This is a development
 package; no ROS apt release or physical-hardware validation is claimed.
 
-Local validation (2026-10-15): Lyrical build and all 63 test cases passed with
+Local validation (2026-10-15): Lyrical build and all 68 test cases passed with
 `rmw_fastrtps_cpp`, including standalone and ros2_control integration tests.
 Installed C++ library and independent command/state message usage also passed.
 See the [validation report](docs/validation.md). The physical CAN bus
@@ -23,9 +23,10 @@ Both standalone and ros2_control use the same driver functions for all five mode
 Select each motor\'s mode at startup; standalone uses YAML `control_mode`.
 
 Default rates: CAN commands are sent at 100 Hz per motor; ros2_control state interfaces
-update at 100 Hz. Per-motor VescState topics publish at 50 Hz in both frontends.
+update at 100 Hz. Standalone publishes all motors on `/vesc/state` as VescStateArray
+at 50 Hz; ros2_control publishes per-motor VescState at 50 Hz.
 JointState publishes at 50 Hz through ros2_control's joint_state_broadcaster.
-The standalone node publishes VescState and diagnostics.
+The standalone node publishes periodic state arrays and error events.
 Fresh commands start control automatically; `~/reboot` takes a logical motor ID and
 sends COMM_REBOOT once to that VESC. Stored commands are cleared before recovery.
 VESC fault codes are queried over CAN at 10 Hz; both frontends publish detected faults
@@ -39,8 +40,9 @@ See the [rate settings](vesc_can_ros2_control/README.md#更新と状態配信の
 - [Motor control modes, units and stop behavior (日本語)](docs/motor-modes.md)
 - [Release preparation](docs/releasing.md)
 - All project-owned messages and services are defined in `vesc_can_msgs`:
-  VescCommand, timestamped VescCommandArray, timestamped VescState and Reboot.
-  VescState contains values received from CAN, with explicit units and freshness handling.
+  VescCommand, timestamped VescCommandArray, VescState, VescStateArray and Reboot.
+  VescState contains CAN feedback and a STATUS5-derived accumulated joint angle
+  (`position_rad`, rad), with explicit units and freshness handling.
   Standalone commands use logical IDs and float32 values.
   ros2_control joint state uses standard ROS messages. The CAN boundary uses `can_msgs/msg/Frame`.
 - [Message mapping and migration (日本語)](docs/messages.md)
@@ -103,13 +105,14 @@ black --line-length 100 vesc_can_driver/launch vesc_can_ros2_control/launch \
   vesc_can_ros2_control/test/test_integration.py
 ```
 
-The standalone API uses VescCommandArray commands, VescState and standard diagnostics; see the
+The standalone API uses VescCommandArray commands, VescStateArray states and error events; see the
 [migration guide](docs/messages.md). C++ users must update the renamed identifiers:
 `ControlMode::Current`, `ControlMode::Velocity`, `ControlMode::Position`,
 `ControlMode::DutyCycle`, and `ControlMode::CurrentVelocity`, `kPi`, `kUnknownValue`, the protocol's `k*Id` constants,
 and `DriverCore::motor_configs()`. PC-side `enable/disable/enabled` have been renamed
 to `activate/deactivate/active`; the standalone activation service is replaced by `~/reboot`. Logical IDs are configured only in the standalone node, and
-`CanTransport::set_command()` takes a motor index.
+`CanTransport::set_commands()` accepts a batch of MotorCommand (motor index and value).
+Unsent values are overwritten per motor; one batch uses one lock and receipt time.
 The driver implementation has four files: `vesc_protocol`, `vesc_driver`, `vesc_node`, and
 `vesc_state`. Include `vesc_driver.hpp` for shared motor types, control and CAN transport,
 and `vesc_state.hpp` for VescState conversion/publication. The shared targets are

@@ -57,9 +57,13 @@ VescSystem は実行ファイルではなく、controller_manager のプロセ�
 各要素に論理 motor_id と float32 の value、配列全体に生成時刻 stamp を入れます
 モードは起動時の YAML から決まり、指令や起動後のパラメータ変更で切り替えません
 上位ノードは vesc_can_msgs にだけ依存して指令・状態・再起動の型を使えます
-状態は `~/motors/<motor_name>/state` から購読します
+通常ノードの状態は `/vesc/state` の VescStateArray から購読し、motor_name で識別します
+hardware の状態は `~/motors/<joint名>/state` の VescState で配信します
 モータ名・logical_id・VESC の controller_id の対応は設定に集約し、上位ノードには CAN ID を要求しません
 ros2_control とモータ名を揃えれば、両入口で同じ関節を識別できます
+全モードの VescState.position_rad は STATUS5 から換算した積算関節角 [rad] です
+車輪など位置制御以外の position state interface も同じ tacho_to_pos() を使います
+位置制御の position state interface は STATUS4 の PID 角度を維持します
 
 ## 制御周期との境界
 
@@ -71,7 +75,18 @@ read は状態のコピー、write は最新指令を共有領域へ渡す処理
 
 CAN executor が一定周期で最新指令を取り出し、変換・制限・異常検査・Frame 送信を
 行います。通常ノードでは VescCommandArray の論理 ID を内部添字に対応付け、指定したモータの
-最新指令を受け渡します。hardware では全関節の指令をまとめて受け渡します。
+最新指令を配列ごとに受け渡します。hardware では全関節の指令をまとめて受け渡します。
+
+通常ノードは起動時に論理 ID からモータ添字への表と、指令・状態の作業領域を確保します
+set_commands() は配列全体を検査し、1 回のロックと共通の受信時刻で指定モータだけを更新します
+同じモータの未送信値は上書きし、指令の履歴をキューへ蓄積しません
+未指定モータの値と受信時刻は維持し、同じ値の再受信でも指定モータの期限を更新します
+CAN の周期処理が最新の送信待ち指令を取り出し、制御用の保持値へ移してフレームを生成します
+フレーム生成と CAN トピックへの publish は同じ CAN executor で順に行います
+状態配列の publish は通常ノードの executor です
+状態は事前確保した領域へ try-lock でコピーし、競合時は前回の状態に鮮度判定を適用します
+異常は検出した処理から /vesc/event へ通知し、状態の周期を待ちません
+周期の /diagnostics は生成・配信しません
 mailbox はモータごとに最新指令だけを保持します。
 配列の stamp は送信側の生成時刻で、指令期限は受信側の単調時刻から判定します
 受信コールバックは同じ executor で STATUS と故障コードを状態へ反映します
@@ -135,7 +150,7 @@ ros2_control の ActuatorInterface があり、USB/UART 接続では有用な候
 state interface と指令を受け渡し、メッセージの生成・配信は行いません。
 関節状態は state interface から取得し、joint_state_broadcaster が `/joint_states` を
 50 Hz で配信します
-通常ノードの状態出力は VescState と診断です
+通常ノードの周期出力は VescStateArray、異常時の通知は /vesc/event です
 [controller_manager の公式仕様](https://control.ros.org/master/doc/ros2_control/controller_manager/doc/userdoc.html#parameters)
 でも、manager の update_rate は hardware の read / controller の update / hardware の write の周期です。
 CAN 送信は両方の入口で各モータ 100 Hz です。例えば 4 台の指令は合計 400 frames/s になります。

@@ -70,7 +70,7 @@ struct MotorConfig
 struct MotorState
 {
   // Joint values include gear ratio/direction; native motor values retain VESC units/sign.
-  double pos_rad{kUnknownValue};
+  double pos_rad{kUnknownValue};  // STATUS4 in position mode, STATUS5 otherwise
   double vel_rad_s{kUnknownValue};
   double motor_current_a{kUnknownValue};
   double temperature_fet_c{kUnknownValue};
@@ -100,11 +100,21 @@ struct MotorState
   std::optional<TimePoint> status6_at;
 };
 
+struct MotorCommand
+{
+  std::size_t motor_idx{};
+  double value{};  // Units follow the motor's fixed control mode.
+};
+
 /// @brief 関節速度 [rad/s] を VESC の電気回転数 [ERPM] に変換
 double vel_to_erpm(const MotorConfig &cfg, double vel_rad_s);
 
 /// @brief 電気回転数 [ERPM] を減速比と方向込みの関節速度 [rad/s] に変換
 double erpm_to_vel(const MotorConfig &cfg, double electrical_rpm);
+
+/// @brief STATUS5 の符号付きカウントを積算関節角度 [rad] に変換
+/// @note 極対数・減速比・方向を適用し，2π で折り返さない
+double tacho_to_pos(const MotorConfig &cfg, std::int32_t counts);
 
 /// @brief 関節位置 [rad] をオフセット込みのモータ PID 角度 [deg] に変換
 /// @return [0, 360) の角度 [deg]
@@ -327,11 +337,11 @@ public:
   /// @return 保存時は true，不正入力・無効状態・ロック競合で false
   bool try_set_commands(const std::vector<double> &values);
 
-  /// @brief ロックを取得し，1 台の最新指令を保存
-  /// @param motor_idx 登録順のモータ添字
-  /// @param value モードの単位に従う指令値
-  /// @return 受理時は true，不正入力・無効状態で false
-  bool set_command(std::size_t motor_idx, double value);
+  /// @brief 指定モータの最新指令を配列ごとに一括保存する
+  /// @param cmds モータ添字と固定モードの指令値，未指定モータは更新しない
+  /// @return 受理時は true，不正配列・停止保持・再起動待機中は false
+  /// @note 同じモータの未送信値を上書きし，全要素を 1 回のロック・同じ受信時刻で保存
+  bool set_commands(const std::vector<MotorCommand> &cmds);
 
   /// @brief ロックを待たずに状態を事前確保済みの配列へコピー
   /// @param[out] states モータ数と同じサイズの出力配列

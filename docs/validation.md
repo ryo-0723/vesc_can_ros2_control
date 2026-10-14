@@ -550,3 +550,67 @@ JointState は約 50 Hz、controller_manager は 100 Hz の設定を維持して
 ドライバ単体と hardware plugin のビルド、公開 CMake target の外部利用も成功しました
 Python の書式を Black で統一し、C++ / Python の書式と文書の参照を検査しました
 検証は模擬 CAN で、実機へ動作指令は送信していません
+
+## STATUS5 由来の積算角の検証
+
+2026-10-15、VescState に position_rad [rad] を追加しました
+全モードで STATUS5 の符号付きタコメータから極対数・減速比・direction を適用して算出します
+2π では折り返さず、PID 用の zero_offset_rad は適用しません
+未受信・期限切れでは NaN を配信します
+位置制御以外の ros2_control position state interface も同じ tacho_to_pos() を使います
+位置制御の position state interface は STATUS4 の PID 角度を維持します
+
+ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=182 で **66 ケースが成功** しました
+colcon test-result は実行単位 5 件を含む **71 tests, 0 errors, 0 failures, 0 skipped** です
+内訳は protocol/core 34、transport 6、state_conversion 6、hardware 設定 8、統合 11、終了コード 1 です
+
+- 14 極のモータで 42 count = 2π rad、正負・複数回転・減速比・回転方向を確認
+- activate / deactivate と STATUS4 の受信で車輪の積算角がリセットされないことを確認
+- 全 5 モードで STATUS5 の積算角を配信し、PID の原点と角度から独立していることを確認
+- STATUS5 の欠測・期限境界・期限切れ・未来の受信時刻で NaN と鮮度を確認
+- 通常ノードの状態トピックでカウントと position_rad の対応を確認
+- 実際の controller_manager と joint_state_broadcaster で、車輪の position state が 2π を超えて保持されることを確認
+- 逆回転で積算角が減少し、停止後は hardware の position state と VescState.position_rad が一致することを確認
+- インストール済み CMake target の外部利用と、新しい状態 msg の C++ / Python シリアライズを確認
+
+5 台の hardware 模擬構成で CAN 指令は 100.1〜100.2 Hz、VescState は 49.9〜50.0 Hz、JointState は 50.0 Hz でした
+通常ノードの 2 台構成でも CAN 指令は約 100 Hz、VescState は約 50 Hz です
+ドライバ単体と hardware plugin をクリーンビルドし、C++ / Python の書式検査も通過しました
+ソースは読み取り専用でマウントし、ビルド・検証出力はリポジトリ外に置きました
+VESC の再起動や int32 カウンタの折り返しを連続化する処理は今回も追加していません
+検証は模擬 CAN で、実機の測定精度・実 CAN バス・Zenoh pico は未検証です
+
+## 通常ノードの最新指令と状態配列の検証
+
+2026-10-15、通常ノードの指令を配列単位で一括保存する set_commands() に変更しました
+論理 ID は起動時に作る表でモータ添字へ変換し、指令・状態の vector は再利用します
+1 配列の全要素を同じ受信時刻と 1 回のロックで保存し、同じモータの未送信値を上書きします
+値が同じでも受信時刻を更新し、未指定モータの期限を更新しません
+指令値の検査は transport に集約し、通常ノードの同じ範囲検査を削除しました
+
+通常ノードは /vesc/state に VescStateArray を周期配信します
+各要素は motor_name を持つ VescState で、配列と各要素に同じ配信時刻を付けます
+作業用の状態と出力配列は事前確保し、try-lock で前回の snapshot と鮮度判定を使えます
+周期の /diagnostics は削除し、異常の検出時だけ /vesc/event に通知します
+hardware のモータ別 VescState 配信と state interface は同じ方式を維持しています
+
+ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=183 で **68 ケースが成功** しました
+colcon test-result は実行単位 5 件を含む **73 tests, 0 errors, 0 failures, 0 skipped** です
+内訳は protocol/core 34、transport 8、state_conversion 6、hardware 設定 8、統合 11、終了コード 1 です
+
+- CAN executor 起動前の複数の更新が、初回送信時には最新値だけになることを確認
+- 一部のモータの更新が、他のモータの保持値を維持することを確認
+- 別スレッドが指令配列を繰り返し更新しても、送信する 2 台の値が別の配列から混ざらないことを確認
+- 配列後半の NaN・範囲外・不正添字・重複添字を検査し、全台停止を確認
+- 通常ノードの状態配列でモータ名・順序・時刻・積算角・故障コードを確認
+- 通常ノードから周期の /diagnostics とモータ別状態を同時配信しないことを確認
+- 状態周期を 2000 ms にした構成でも、指令エラーと CAN エラーを 1.5 ms / 1.1 ms で通知
+- 本体の故障コードの即時通知・同じ故障の重複抑制・再起動・停止保持を確認
+- 外部 CMake target と新しい状態配列の Python シリアライズを確認
+
+通常ノードの状態配列は 50.0 Hz、各モータの CAN 指令は 100.0 Hz でした
+追加で state_publish_period_ms=2 を設定し、2 台の状態配列を 500.3 Hz で受信しました
+このときも 2 台それぞれの CAN 指令は 100.0 Hz でした
+これは模擬 CAN の動作確認で、従来の個別配信に対する CPU・帯域の比較測定ではありません
+ビルド中に build.make の時刻が 1.7 秒先を示す Clock skew 警告がありましたが、全ターゲットのコンパイル・リンクと検証は完了しました
+実 CAN バス・実機・Zenoh pico の性能は未検証です

@@ -4,8 +4,11 @@
 
 namespace vesc_can_driver
 {
-vesc_can_msgs::msg::VescState make_vesc_state(
-  const MotorConfig &cfg, const MotorState &state, TimePoint now)
+namespace
+{
+/// @brief 確保済みの VescState を上書きし，名前の文字列領域を再利用する
+void fill_state(const MotorConfig &cfg, const MotorState &state, TimePoint now,
+  vesc_can_msgs::msg::VescState &msg)
 {
   const auto timeout = cfg.feedback_timeout;
   const bool status_1_fresh = feedback_fresh(state.status1_at, now, timeout);
@@ -14,7 +17,7 @@ vesc_can_msgs::msg::VescState make_vesc_state(
   const bool status_4_fresh = feedback_fresh(state.status4_at, now, timeout);
   const bool status_5_fresh = feedback_fresh(state.status5_at, now, timeout);
 
-  vesc_can_msgs::msg::VescState msg;
+  msg.motor_name = cfg.name;
   msg.controller_id = cfg.controller_id;
   msg.erpm = status_1_fresh ? state.electrical_rpm : kUnknownValue;
   msg.motor_current_a = status_1_fresh ? state.motor_current_a : kUnknownValue;
@@ -30,20 +33,39 @@ vesc_can_msgs::msg::VescState make_vesc_state(
   msg.input_voltage_v = status_5_fresh ? state.input_voltage_v : kUnknownValue;
   msg.tachometer_counts = state.tachometer_counts;
   msg.tachometer_fresh = status_5_fresh;
+  msg.position_rad = status_5_fresh ? tacho_to_pos(cfg, state.tachometer_counts) : kUnknownValue;
   msg.fault_code =
     feedback_fresh(state.fault_at, now, timeout) ? state.fault_code : kUnknownFaultCode;
+}
+}  // namespace
+
+vesc_can_msgs::msg::VescState make_vesc_state(
+  const MotorConfig &cfg, const MotorState &state, TimePoint now)
+{
+  vesc_can_msgs::msg::VescState msg;
+  fill_state(cfg, state, now, msg);
   return msg;
 }
-MotorStatePublisher::MotorStatePublisher(
-  rclcpp::Node &node, const std::vector<MotorConfig> &configs, const std::string &error_topic)
+
+MotorStatePublisher::MotorStatePublisher(rclcpp::Node &node,
+  const std::vector<MotorConfig> &configs, const std::string &error_topic,
+  const std::string &state_topic)
   : configs_(configs), clock_(node.get_clock()), node_name_(node.get_fully_qualified_name())
 {
   error_pub_ = node.create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
     error_topic, rclcpp::QoS(1).reliable().transient_local());
-  pubs_.reserve(configs_.size());
-  for (const auto &cfg : configs_) {
-    pubs_.push_back(
-      node.create_publisher<vesc_can_msgs::msg::VescState>("~/motors/" + cfg.name + "/state", 10));
+  state_msg_.states.resize(configs_.size());
+  for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
+    state_msg_.states[idx].motor_name = configs_[idx].name;
+  }
+  if (!state_topic.empty()) {
+    array_pub_ = node.create_publisher<vesc_can_msgs::msg::VescStateArray>(state_topic, 1);
+  } else {
+    pubs_.reserve(configs_.size());
+    for (const auto &cfg : configs_) {
+      pubs_.push_back(node.create_publisher<vesc_can_msgs::msg::VescState>(
+        "~/motors/" + cfg.name + "/state", 10));
+    }
   }
 }
 
@@ -80,10 +102,17 @@ void MotorStatePublisher::publish_error(const DriverFault &fault)
 void MotorStatePublisher::publish(
   const std::vector<MotorState> &states, TimePoint now, const rclcpp::Time &stamp)
 {
+  state_msg_.stamp = stamp;
   for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
-    auto msg = make_vesc_state(configs_[idx], states[idx], now);
+    auto &msg = state_msg_.states[idx];
+    fill_state(configs_[idx], states[idx], now, msg);
     msg.stamp = stamp;
-    pubs_[idx]->publish(msg);
+    if (!array_pub_) {
+      pubs_[idx]->publish(msg);
+    }
+  }
+  if (array_pub_) {
+    array_pub_->publish(state_msg_);
   }
 }
 }  // namespace vesc_can_driver

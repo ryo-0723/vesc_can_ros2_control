@@ -7,15 +7,15 @@
 |---|---|---|
 | `vesc_can_driver/src/vesc_protocol.cpp` | VESC 6 の CAN ID・ペイロード形式、動作指令・故障問い合わせの encode、STATUS1〜6・故障応答の decode | `vesc_can_driver::protocol` |
 | `vesc_can_driver/src/vesc_driver.cpp` | モータ設定、単位変換、状態更新、5 モードの指令、CAN の周期送受信・停止管理 | `vesc_can_driver::driver` |
-| `vesc_can_driver/src/vesc_node.cpp` | 通常ノードのパラメータ、指令トピック、再起動サービス、モータ状態と診断 | `vesc_node` |
-| `vesc_can_driver/src/vesc_state.cpp` | VescState への変換、モータごとの状態配信、即時の異常通知 | `vesc_can_driver::state` |
+| `vesc_can_driver/src/vesc_node.cpp` | 通常ノードのパラメータ、指令配列の一括更新、再起動サービス、状態配列 | `vesc_node` |
+| `vesc_can_driver/src/vesc_state.cpp` | VescState への変換、状態配列またはモータ別の配信、即時の異常通知 | `vesc_can_driver::state` |
 | `vesc_can_ros2_control/src/vesc_system.cpp` | ros2_control の設定、lifecycle、state / command interface の受け渡し | `vesc_hardware` |
 
 公開ヘッダは `vesc_protocol.hpp`、`vesc_driver.hpp`、`vesc_state.hpp` の 3 個です。
 通常ノードは実行ファイルなので公開ヘッダを持ちません。
 `vesc_system.hpp` は別パッケージの hardware plugin のヘッダです。
 独自 msg / srv は独立した `vesc_can_msgs` にまとめます
-`msg/` は VescCommand、VescCommandArray、VescState、`srv/` は Reboot の定義です
+`msg/` は VescCommand、VescCommandArray、VescState、VescStateArray、`srv/` は Reboot の定義です
 上位ノードはドライバ本体に依存せず、指令・状態・再起動の型を使えます
 
 ## 共用する範囲
@@ -83,14 +83,17 @@ STATUS と指令の受信時刻は `std::optional<TimePoint>` です。
 `steady_now` は期限判定、`stamp` はメッセージに付ける ROS 時刻です。
 通常ノードの指令は `/vesc/commands` の VescCommandArray に統一しています
 logical_id は通常ノードで保持し、共通の MotorConfig には CAN の controller_id だけを渡します
-ROS 設定キー、state トピック名、interface 名は維持しています
+通常ノードは state_topic（既定 /vesc/state）に VescStateArray を配信します
+hardware のモータ別 state トピックと state interface の名前は同じです
 VescState は取得する CAN 生値から独自定義にし、項目名に単位を付けています
+VescState.position_rad は STATUS5 を tacho_to_pos() で積算関節角 [rad] へ換算した値です
+位置制御以外の hardware position state も同じ関数を使い、位置制御では STATUS4 を維持します
 通常ノードの control_mode / command_interface は起動後の変更を拒否します
 
 ## 周期と終了処理
 
 CAN 指令は各モータ 100 Hz、VescState は両入口で 50 Hz です
-通常ノードは VescState と診断を配信します
+通常ノードは周期の VescStateArray と、検出時だけの /vesc/event を配信します
 JointState は ros2_control の joint_state_broadcaster が 50 Hz で配信します
 ros2_control の state interface は controller_manager の 100 Hz で更新します。
 CAN と ROS 状態は独立したタイマーで扱い、モータごとのスレッドは追加しません。

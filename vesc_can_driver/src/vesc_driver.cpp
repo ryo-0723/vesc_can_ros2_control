@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cmath>
 #include <limits>
 #include <set>
@@ -69,6 +70,11 @@ double vel_to_erpm(const MotorConfig &cfg, double vel_rad_s)
 double erpm_to_vel(const MotorConfig &cfg, double electrical_rpm)
 {
   return electrical_rpm * (2.0 * kPi) / (60.0 * cfg.gear_ratio * cfg.pole_pairs) * cfg.direction;
+}
+
+double tacho_to_pos(const MotorConfig &cfg, std::int32_t counts)
+{
+  return counts * (2.0 * kPi) / (6.0 * cfg.pole_pairs * cfg.gear_ratio) * cfg.direction;
 }
 
 double pos_to_deg(const MotorConfig &cfg, double pos_rad)
@@ -259,8 +265,7 @@ bool DriverCore::receive(const can_msgs::msg::Frame &frame, TimePoint now)
   } else if (protocol::decode_status_5(frame, status_5)) {
     state.tachometer_counts = status_5.tachometer_counts;
     if (config_it->mode != ControlMode::Position) {
-      state.pos_rad = status_5.tachometer_counts * (2.0 * kPi) /
-                      (6.0 * config_it->pole_pairs * config_it->gear_ratio) * config_it->direction;
+      state.pos_rad = tacho_to_pos(*config_it, status_5.tachometer_counts);
     }
     state.input_voltage_v = status_5.input_voltage_v;
     state.status5_at = now;
@@ -628,21 +633,42 @@ bool CanTransport::try_set_commands(const std::vector<double> &values)
   return true;
 }
 
-bool CanTransport::set_command(std::size_t motor_idx, double value)
+bool CanTransport::set_commands(const std::vector<MotorCommand> &cmds)
 {
-  if (motor_idx >= pending_cmds_.size() || shutdown_started_.load()) {
+  if (shutdown_started_.load() || cmds.empty()) {
     return false;
   }
-  if (!command_is_valid(core_.motor_configs()[motor_idx], value)) {
-    stop_on_error(core_.motor_configs()[motor_idx].name + ": invalid command");
-    return false;
+  const auto received_at = SteadyClock::now();
+  std::bitset<256> seen;
+  for (const auto &cmd : cmds) {
+    if (cmd.motor_idx >= pending_cmds_.size()) {
+      stop_on_error("Unknown motor index: " + std::to_string(cmd.motor_idx));
+      return false;
+    }
+    const auto &cfg = core_.motor_configs()[cmd.motor_idx];
+    if (seen.test(cmd.motor_idx)) {
+      stop_on_error(cfg.name + ": duplicate motor index");
+      return false;
+    }
+    if (!command_is_valid(cfg, cmd.value)) {
+      stop_on_error(cfg.name + ": invalid command value " + std::to_string(cmd.value));
+      return false;
+    }
+    seen.set(cmd.motor_idx);
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  if (core_.faulted() || reboot_idx_ || SteadyClock::now() < rx_after_[motor_idx] ||
+  if (shutdown_started_.load() || core_.faulted() || reboot_idx_ ||
       (!opts_.auto_activate && (!active_.load() || stop_requested_.load()))) {
     return false;
   }
-  pending_cmds_[motor_idx] = {value, SteadyClock::now()};
+  const auto now = SteadyClock::now();
+  if (std::any_of(cmds.begin(), cmds.end(),
+        [&](const MotorCommand &cmd) { return now < rx_after_[cmd.motor_idx]; })) {
+    return false;
+  }
+  for (const auto &cmd : cmds) {
+    pending_cmds_[cmd.motor_idx] = {cmd.value, received_at};
+  }
   return true;
 }
 

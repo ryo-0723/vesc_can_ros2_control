@@ -67,16 +67,19 @@ ERPM      = motor_RPM × pole_pairs
 
 通常ノードでも ROS トピックに送る速度の単位は関節 rad/s です。
 `max_rpm` は ERPM ではありません。
-STATUS5 のタコメータを公開する場合の関節位置は次の変換です。
+STATUS5 からの積算関節角は、全モードの VescState.position_rad に次の式で配信します
 
 ```text
 joint_rad = tachometer_counts × 2π / (6 × pole_pairs × gear_ratio) × direction
 ```
 
 これは VESC タコメータ由来の位置で、起動時の自動ゼロ合わせや絶対位置取得は
-行いません。再起動・カウンタの折り返しを連続化する処理もありません。
+行いません。角度を 2π で折り返さず、逆回転では符号付きのカウントに従って減少します
+zero_offset_rad は位置 PID 専用で、この積算角には適用しません
+再起動・int32 カウンタの折り返しを連続化する処理はありません
 plugin は位置モード以外の関節に position state interface を登録すると STATUS5 を必須にします。
 通常ノードでは `require_tachometer: true` で必須にします。
+状態配信は両入口で 50 Hz、hardware の state interface は controller_manager の 100 Hz 設定で更新します
 
 ## 位置モード
 

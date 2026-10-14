@@ -78,8 +78,7 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 | /vesc/commands | vesc_can_msgs/msg/VescCommandArray | motor_id は論理 ID、value は起動時モードの単位、stamp は配列の生成時刻 |
 | /vesc/event | diagnostic_msgs/msg/DiagnosticArray | 異常を検出した処理から即時通知、全台停止の理由 |
 | ~/reboot | vesc_can_msgs/srv/Reboot | motor_id に論理 ID を指定し、対応する 1 台を再起動 |
-| /diagnostics | diagnostic_msgs/msg/DiagnosticArray | 接続・有効状態・ドライバ異常 |
-| ~/motors/<motor_name>/state | vesc_can_msgs/msg/VescState | 配信時刻 stamp とモータ生値、erpm は電気的 RPM、pid_pos_deg はモータ PID 角度 [deg] |
+| /vesc/state | vesc_can_msgs/msg/VescStateArray | 全モータの状態と配信時刻、各要素に motor_name と積算関節角 position_rad [rad] |
 
 `VescCommandArray.commands` の各要素は `uint8 motor_id / float32 value` です
 配列の順序は `motors` の登録順と違っても使えます
@@ -93,20 +92,38 @@ duty の符号は direction、上限は max_duty（既定 1.0）で設定しま�
 1 台だけでも複数台でも同じ配列型を使い、未指定モータの指令や受信時刻は更新しません
 空の配列は指令を更新しません
 未登録 ID、ID の重複、NaN/Inf、範囲外の指令は全台停止になります
-`command_topic` と `error_topic` でトピック名を設定できます
+`command_topic`、`state_topic`、`error_topic` でトピック名を設定できます
+指令配列は 1 回のロックと共通の受信時刻で一括保存します
+未送信の同じモータへの指令は最新値で上書きし、送信待ちの指令履歴を作りません
+同じ値の再受信でも指令期限を更新します
 
-`VescState` は関節単位へ変換する前の VESC 値を配信します
-状態の購読先は `~/motors/<motor_name>/state` で選びます
-`controller_id` は実機の識別・診断用として残しますが、上位ノードの振り分けには不要です
+`VescState` は VESC の生値と、STATUS5 から換算した積算関節角 `position_rad` [rad] を配信します
+`position_rad = tachometer_counts × 2π / (6 × pole_pairs × gear_ratio) × direction` です
+全モードで同じ式を使い、2π で折り返さず、未受信・期限切れでは NaN を返します
+オドメトリには前回値との差分を使います
+STATUS5 を必須にする場合は各モータの `require_tachometer: true` を設定します
+VESC 側で STATUS5 の周期送信を有効にし、CAN ブリッジの受信フィルタでも通してください
+積算角の測定更新は STATUS5 の受信周期に従い、状態トピックの配信周期とは別です
+通常ノードは `/vesc/state` に全モータを YAML の motors 順で配信します
+各要素の `motor_name` で対象を選び、`controller_id` は実機の識別・診断用に使います
+配列全体と各要素の stamp は同じ配信時刻で、CAN の同時測定を表しません
+`state_topic: ""` を指定すると `~/motors/<motor_name>/state` に個別配信できます
+全モータを読む場合は配列で 1 周期 1 回の publish にまとめられます
+一部だけ読む場合は個別トピックで必要なモータのデータだけ受け取れます
+配列の publisher は KeepLast(1) / Reliable です
+publish の呼び出しごとに配信処理へ進むため、全台分を配列にすると呼び出し回数を減らせます
+根拠となる処理は [rclcpp Publisher](https://github.com/ros2/rclcpp/blob/lyrical/rclcpp/include/rclcpp/publisher.hpp#L260-L271) を参照してください
+CPU や帯域の削減率を実測した結論ではなく、この配信回数に基づく選択です
 
-通常ノードの状態出力は VescState と診断です
+通常ノードの周期出力は VescStateArray です
+異常は検出時だけ `/vesc/event` に通知し、周期の `/diagnostics` は配信しません
 関節状態は ros2_control の state interface から取得し、トピックが必要なら
 joint_state_broadcaster が `/joint_states` を配信します
 
 ```bash
 ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
   '{stamp: now, commands: [{motor_id: 1, value: 1.0}]}'
-ros2 topic echo /vesc_can_ros2_control/motors/drive_joint/state
+ros2 topic echo /vesc/state
 ```
 
 旧 ActuatorTarget / ActuatorState、SetPosition.srv は廃止しました
@@ -116,8 +133,11 @@ ros2 topic echo /vesc_can_ros2_control/motors/drive_joint/state
 C++ / Python の利用例は [vesc_can_msgs](../vesc_can_msgs/README.md) を参照してください
 状態値の取得範囲、未取得値、旧 API の移行は [メッセージ対応表](../docs/messages.md) を参照してください。
 通常ノードの CAN 指令は `update_period_ms` (既定 10 ms、各モータ 100 Hz)、
-状態・診断は `state_publish_period_ms` (既定 20 ms、50 Hz) で周期的に配信します。
+状態配列は `state_publish_period_ms` (既定 20 ms、50 Hz) で周期的に配信します。
 指令コールバックは最新値を渡し、CAN 送信自体は専用 executor のタイマーが行います。
+指令受付と状態配信は通常ノードの executor、CAN 受信・フレーム生成・送信は CAN executor です
+フレーム生成と CAN トピックへの publish は同じスレッドで順番に行います
+指令と状態の作業用 vector は起動時に確保して再利用し、状態取得は try-lock で待機しません
 状態の配信周期と VESC 自体の STATUS 送信周期は独立しています。
 
 通常ノードだけの従来設定 max_rpm / rpm_slew_rate はモータ機械 RPM / RPM毎秒です。
@@ -162,7 +182,8 @@ PC 側の不正指令や通信途絶は source=driver として全台の停止�
 VESC 本体の同じ故障コードは繰り返さず、別のコードまたは正常応答後の再発を通知します
 PC 側の同じ異常はラッチ中に繰り返しません
 Reliable / TransientLocal / KeepLast(1) なので、publisher の生存中は最後の異常を後から取得できます
-これは異常の履歴で、復帰は周期の VescState / diagnostics または hardware lifecycle で確認します
+これは異常の履歴です。本体の現在の故障コードは周期の状態配信で確認します
+PC 側の停止保持は通常ノードの reboot または hardware lifecycle の復旧操作で解除します
 
 ```bash
 ros2 topic echo /vesc/event diagnostic_msgs/msg/DiagnosticArray --qos-durability transient_local
