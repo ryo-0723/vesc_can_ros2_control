@@ -2,7 +2,7 @@
 
 この文書は本リポジトリの実装が受け付ける設定と指令を説明します。
 VESC 自体の全制御機能を提供する API ではありません。モードは関節ごとに起動時に
-選択し、電流・速度・位置・電流＋速度を同じ System / 通常ノード内で混在できます。
+選択し、速度・電流・位置・duty 比・速度＋電流を同じ System / 通常ノード内で混在できます。
 実行中のモード切り替えは実装していません。設定変更後は通常ノードを再起動するか、
 URDF を変更して hardware を再ロードします。
 
@@ -11,9 +11,11 @@ URDF を変更して hardware を再ロードします。
 | `current` | モータ電流の直接指令 | モータ A、正負は関節方向 | `SET_CURRENT` | STATUS1。位置状態が必要なら STATUS5 も必要 |
 | `velocity` | 車輪などの回転速度 | 関節 rad/s | `SET_RPM`、値は ERPM | STATUS1。位置状態が必要なら STATUS5 も必要 |
 | `position` | 操舵などの角度 | 関節 rad | `SET_POS`、値はモータ PID 角度 deg | STATUS1 と STATUS4。位置が設定範囲内であること |
+| `duty_cycle` | PWM duty 比の直接指令 | 比率 [-1, 1]、正負は関節方向 | `SET_DUTY`、比率×100000 | STATUS1。位置状態が必要なら STATUS5 も必要 |
 | `current_velocity` | 電流で始動してから速度制御 | 関節 rad/s | 始動中 `SET_CURRENT`、移行後 `SET_RPM` | STATUS1。位置状態が必要なら STATUS5 も必要 |
 
-`effort` と `duty_cycle` の指令は未対応です。電流 [A] をトルク [Nm] として扱いません。
+`effort` の指令は未対応です
+電流 [A] をトルク [Nm] として扱いません
 モード選択・構成検査・指令の範囲検査は共通ドライバの関数を使います。
 電流モード、電流始動、全台停止は同じ電流フレーム生成処理を使い、速度モードと
 電流＋速度の移行後は同じ変化率制限・ERPM 変換処理を使います。
@@ -101,9 +103,35 @@ joint_rad = remainder(feedback_deg × π / 180 - zero_offset_rad, 2π)
 位置指令には速度モードの slew rate を適用しません。速度・加速度を制限する軌道は
 上位 controller 側で生成します。
 
+
+## duty 比モード
+
+指令は百分率でなく [-1, 1] の比率です
+0.5 は正方向の 50%、-0.25 は逆方向の 25% を表します
+
+```text
+CAN duty ratio = command × direction
+payload        = round(CAN duty ratio × 100000)
+CAN ID         = (0 << 8) | controller_id
+```
+
+[公式 VESC 6.06 の comm_can_set_duty](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L469-L475) の ID・倍率・符号付き int32 形式を使用します
+ペイロードは big endian の 4 バイト、拡張 CAN フレームです
+direction=-1、value=0.25 なら比率 -0.25、ペイロード -25000 を送ります
+減速比・極対数で倍率を変えず、速度の変化率制限も掛けません
+
+max_duty は絶対値の上限で、0 < max_duty ≤ 1、既定値は 1.0 です
+設定の上限を超える値や NaN/Inf は全台の異常停止になります
+0 の指令は他の非位置モードと同じ SET_CURRENT(0 A) で電流を解放します
+
+ros2_control の duty_cycle command / state interface は関節方向の比率です
+state interface は STATUS1 の duty に direction を適用します
+VescState.duty_cycle は VESC 生値の比率を保持します
+
 ## 設定例
 
-通常ノードでは YAML の各モータに `control_mode` を指定します。
+通常ノードでは YAML の各モータに `control_mode` を指定します
+control_mode と command_interface は読み取り専用で、起動後の変更要求は拒否します
 `command_interface` は省略時にそのモードから決まります。
 両方指定した場合は次の対応表と一致させます。
 `control_mode` を省略した旧設定も利用でき、その場合は `command_interface` から
@@ -114,6 +142,7 @@ joint_rad = remainder(feedback_deg × π / 180 - zero_offset_rad, 2π)
 | current | current | VescCommand.value [A] |
 | velocity | velocity | VescCommand.value [rad/s] |
 | position | position | VescCommand.value [rad] |
+| duty_cycle | duty_cycle | VescCommand.value [比率 -1〜1] |
 | current_velocity | velocity | VescCommand.value [rad/s] |
 
 ```yaml
@@ -139,6 +168,13 @@ current_joint:
   control_mode: current
   pole_pairs: 7.0
   max_current_a: 3.0
+duty_joint:
+  logical_id: 5
+  controller_id: 41
+  control_mode: duty_cycle
+  pole_pairs: 7.0
+  direction: -1.0
+  max_duty: 0.5
 hybrid_joint:
   logical_id: 4
   controller_id: 31
@@ -151,42 +187,43 @@ hybrid_joint:
 ```
 
 上記は `ros__parameters` 内の抜粋です。完全な設定は
-[four_modes.yaml](../vesc_can_driver/config/four_modes.yaml) を参照してください。
+[five_modes.yaml](../vesc_can_driver/config/five_modes.yaml) を参照してください。
 通常ノードの指令は `VescCommandArray.commands` に各モータの指令を入れます
 motor_id は YAML の logical_id で、制御モードは起動時の control_mode から決まります
 配列の stamp は生成時の ROS 時刻で、指令に mode は持たせません
-value に電流 [A]、関節位置 [rad]、関節速度 [rad/s] を指定します
+value に電流 [A]、関節位置 [rad]、関節速度 [rad/s]、duty 比を指定します
 上位ノードに CAN ID の対応表を持たせる必要はありません
 
 ros2_control では各 joint に `control_mode` param と上表の command interface を
 1 つ記述し、同名の state interface も登録します。
-設定例は [vesc_four_modes.urdf](../vesc_can_ros2_control/urdf/vesc_four_modes.urdf) と
-[controllers_four_modes.yaml](../vesc_can_ros2_control/config/controllers_four_modes.yaml) です。
+設定例は [vesc_five_modes.urdf](../vesc_can_ros2_control/urdf/vesc_five_modes.urdf) と
+[controllers_five_modes.yaml](../vesc_can_ros2_control/config/controllers_five_modes.yaml) です。
 電流の forward controller は `interface_name: current`、電流＋速度は
-`interface_name: velocity` を指定します。
+`interface_name: velocity`、duty は `interface_name: duty_cycle` を指定します
 
 ```bash
 ros2 launch vesc_can_ros2_control vesc_control.launch.py use_mock:=true \
-  urdf:="$(ros2 pkg prefix --share vesc_can_ros2_control)/urdf/vesc_four_modes.urdf" \
-  controllers_file:="$(ros2 pkg prefix --share vesc_can_ros2_control)/config/controllers_four_modes.yaml" \
-  controllers:="joint_state_broadcaster drive_controller steer_controller current_controller hybrid_controller" \
+  urdf:="$(ros2 pkg prefix --share vesc_can_ros2_control)/urdf/vesc_five_modes.urdf" \
+  controllers_file:="$(ros2 pkg prefix --share vesc_can_ros2_control)/config/controllers_five_modes.yaml" \
+  controllers:="joint_state_broadcaster drive_controller steer_controller current_controller hybrid_controller duty_controller" \
   can_tx_topic:=/bench/can/tx can_rx_topic:=/bench/can/rx
-# 別端末で各指令を周期送信（電流は A、駆動・hybrid は rad/s、操舵は rad）
+# 別端末で各指令を周期送信（電流は A、駆動・hybrid は rad/s、操舵は rad、duty は比率）
 ros2 topic pub -r 20 /drive_controller/commands std_msgs/msg/Float64MultiArray '{data: [2.0]}'
 ros2 topic pub -r 20 /steer_controller/commands std_msgs/msg/Float64MultiArray '{data: [0.25]}'
 ros2 topic pub -r 20 /current_controller/commands std_msgs/msg/Float64MultiArray '{data: [1.5]}'
 ros2 topic pub -r 20 /hybrid_controller/commands std_msgs/msg/Float64MultiArray '{data: [2.0]}'
+ros2 topic pub -r 20 /duty_controller/commands std_msgs/msg/Float64MultiArray '{data: [0.25]}'
 ```
 
-通常ノードで模擬 4 台を使う場合は、次を別々の端末で起動します。
+通常ノードで模擬 5 台を使う場合は、次を別々の端末で起動します。
 この構成では模擬ノードを手動で起動し、通常ノード用 launch の use_mock は省略します。
 
 ```bash
 ros2 run vesc_can_driver fake_vesc_node --ros-args \
-  -p controller_ids:='[11, 21, 12, 31]' \
+  -p controller_ids:='[11, 21, 12, 31, 41]' \
   -p can_tx_topic:=/bench/can/tx -p can_rx_topic:=/bench/can/rx
 ros2 launch vesc_can_driver vesc_standalone.launch.py \
-  config:="$(ros2 pkg prefix --share vesc_can_driver)/config/four_modes.yaml"
+  config:="$(ros2 pkg prefix --share vesc_can_driver)/config/five_modes.yaml"
 ```
 
 通常ノードでは次の指令ストリームを起動します
@@ -194,12 +231,12 @@ ros2 launch vesc_can_driver vesc_standalone.launch.py \
 
 ```bash
 ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
-  '{stamp: now, commands: [{motor_id: 1, value: 2.0}, {motor_id: 2, value: 0.25}, {motor_id: 3, value: 1.5}, {motor_id: 4, value: 2.0}]}'
+  '{stamp: now, commands: [{motor_id: 1, value: 2.0}, {motor_id: 2, value: 0.25}, {motor_id: 3, value: 1.5}, {motor_id: 4, value: 2.0}, {motor_id: 5, value: 0.25}]}'
 ```
 
 全モータへ command_timeout_ms 内に新しい指令を送り続けます
 
-## 電流＋速度モード
+## 速度＋電流モード
 
 通常ノードと hardware plugin の両方で利用できます。
 `startup_current_a > 0`、`rpm_control_threshold_rpm > 0`、
@@ -214,13 +251,13 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 速度モードは常に直接 RPM 制御します。以前の「velocity に非ゼロの
 startup_current_a を設定して暗黙に電流始動する」設定は、
 `control_mode: current_velocity` を追加して移行してください。
-他の 3 モードで非ゼロの `startup_current_a` を設定すると構成エラーになります。
+他の 4 モードで非ゼロの `startup_current_a` を設定すると構成エラーになります。
 
 ## 有効化、異常、停止
 
 通常ノードは全台の必要な STATUS と新しい指令が揃うと動作を開始します
 VESC の有効化コマンドや enable サービスは使いません
-plugin は activate 時にフィードバックを待ち、電流・速度・電流＋速度の初期指令を 0、
+plugin は activate 時にフィードバックを待ち、電流・速度・duty 比・速度＋電流の初期指令を 0、
 位置の初期指令を現在位置に設定します。
 
 指令の期限切れ、必要な STATUS の期限切れ、NaN/Inf、範囲外指令、始動失敗で

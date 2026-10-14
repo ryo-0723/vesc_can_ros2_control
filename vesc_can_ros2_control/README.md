@@ -22,8 +22,8 @@ controller_manager が `vesc_can_ros2_control/VescSystem` をロードし、
 各 VESC を `<joint>` として記述します。4 輪独立駆動・操舵なら同じ System 内へ
 8 関節を登録できます。CAN ID は同じバス内で重複させません。
 
-各関節の command_interface は current、velocity、position のいずれかを 1 つ指定します。
-モードは joint param の `control_mode` で current / velocity / position / current_velocity を
+各関節の command_interface は current、velocity、position、duty_cycle のいずれかを 1 つ指定します
+モードは joint param の `control_mode` で current / velocity / position / duty_cycle / current_velocity を
 指定します。省略時は command interface と同じモードです。
 current_velocity は velocity command interface を使います。
 同じ名前の state_interface も必要です。position/velocity/current/
@@ -36,8 +36,9 @@ temperature_fet/temperature_motor/input_voltage/duty_cycle の状態を公開で
 | pole_pairs | モータの極対数、正整数、必須。14 極なら 7 |
 | gear_ratio | モータ回転数 / 関節回転数。20:1 減速なら 20 |
 | direction | 関節正方向に対するモータ方向、+1 または -1 |
-| control_mode | current / velocity / position / current_velocity。省略時は command interface と同じ |
+| control_mode | current / velocity / position / duty_cycle / current_velocity。省略時は command interface と同じ |
 | max_current_a | 電流指令の上限 [モータ A]、既定 10。速度 PID の電流制限設定は VESC 側で行う |
+| max_duty | duty_cycle の比率上限、0 < max_duty ≤ 1、既定 1.0 |
 | startup_current_a | current_velocity の始動電流 [A]、正数を明示指定し max_current_a 以下にする |
 | rpm_control_threshold_rpm | current_velocity の移行閾値 [モータ機械 RPM]、既定 1000 |
 | startup_timeout_ms | current_velocity の始動期限、既定 1000 ms |
@@ -51,8 +52,10 @@ temperature_fet/temperature_motor/input_voltage/duty_cycle の状態を公開で
 hardware パラメータには can_tx_topic、can_rx_topic、send_period_ms (既定 10)、
 state_publish_period_ms (既定 20)、activation_timeout_ms (既定 2000) を指定できます。
 current state interface は関節方向の符号を適用したモータ電流 [A] です。
+duty_cycle state interface も direction を適用した関節方向の比率です
+VescState の電流と duty_cycle は VESC 生値を保持します
 電流モードでも position state interface を登録する場合は STATUS5 が必要です。
-4 モードの URDF / controller 設定と起動コマンドは
+5 モードの URDF / controller 設定と起動コマンドは
 [モータの制御モード](../docs/motor-modes.md#設定例) を参照してください。
 
 速度変換は `ERPM = joint_rad_s × 60/(2π) × gear_ratio × pole_pairs × direction`。
@@ -103,7 +106,7 @@ plugin は `vesc_can_driver::CanTransport` を利用します。送受信トピ�
 state interface を直接読むオドメトリ controller は 100 Hz の更新を使えます。
 `VescState` は CAN 用 executor の状態タイマーで配信し、read/write では生成・配信しません。
 配信先は `/<ros2_control の name>_can_io/motors/<joint名>/state` です。
-例の `VescFourModes` なら `/VescFourModes_can_io/motors/drive_joint/state` になります。
+例の `VescFiveModes` なら `/VescFiveModes_can_io/motors/drive_joint/state` になります。
 namespace を付けた場合はこの先頭に追加されます。電流・温度・電圧などの生値と単位は
 通常ノードと同じ [メッセージ対応表](../docs/messages.md) に従います。
 

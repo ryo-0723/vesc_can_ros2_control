@@ -9,7 +9,7 @@
 | 用途 | 型 | 単位・識別 |
 |---|---|---|
 | CAN 境界 | can_msgs/msg/Frame | 元の CAN ID、フラグ、DLC、ペイロードを保持 |
-| モータ指令（通常ノード） | vesc_can_msgs/msg/VescCommandArray | 生成時刻と論理 ID・float32 指令値の配列、単位は A / 関節 rad / rad/s |
+| モータ指令（通常ノード） | vesc_can_msgs/msg/VescCommandArray | 生成時刻と論理 ID・float32 指令値の配列、単位は A / 関節 rad / rad/s / duty 比 |
 | VESC 状態 | vesc_can_msgs/msg/VescState | モータ名ごとのトピック、controller_id は CAN の機器 ID |
 | VESC 再起動（通常ノード） | vesc_can_msgs/srv/Reboot | motor_id は論理 ID、対応する 1 台を再起動 |
 | 関節状態（ros2_control） | sensor_msgs/msg/JointState | joint_state_broadcaster が state interface から配信 |
@@ -39,7 +39,9 @@ VescCommand[] commands
 motor_id は設定の logical_id に対応し、0〜255 の範囲で重複させません
 モードは YAML の control_mode で起動時に固定し、指令に mode は持たせません
 通常ノードは control_mode / command_interface パラメータの起動後の変更も拒否します
-value は電流 [A]、関節速度 [rad/s]、関節位置 [rad] のいずれかです
+value は電流 [A]、関節速度 [rad/s]、関節位置 [rad]、duty 比のいずれかです
+モードは current / velocity / position / duty_cycle / current_velocity から選びます
+duty_cycle は関節方向の比率 [-1, 1] で、direction と max_duty を適用して送信します
 current_velocity でも value は関節速度 [rad/s] です
 配列順は自由で、未指定モータの指令と期限は維持します
 未登録 ID、重複 ID、不正な指令値は全台停止になります

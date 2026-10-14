@@ -93,6 +93,7 @@ private:
     double electrical_rpm{};
     double pos_rad{};
     double motor_current_a{};
+    double duty_cycle{};
     TimePoint cmd_at{};
     TimePoint boot_until{};
   };
@@ -154,16 +155,24 @@ private:
     }
     const auto value = read_command_payload(frame.data);
     switch (packet_id) {
+      case protocol::kSetDutyId:
+        motor_it->duty_cycle = value / 100000.0;
+        motor_it->electrical_rpm = motor_it->duty_cycle * 1000.0;
+        motor_it->motor_current_a = 0.0;
+        break;
       case protocol::kSetRpmId:
+        motor_it->duty_cycle = 0.0;
         motor_it->electrical_rpm = value;
         motor_it->motor_current_a = 0.0;
         break;
       case protocol::kSetPositionId:
+        motor_it->duty_cycle = 0.0;
         motor_it->pos_rad = value / 1e6 * kPi / 180.0;
         motor_it->electrical_rpm = 0.0;
         motor_it->motor_current_a = 0.0;
         break;
       case protocol::kSetCurrentId:
+        motor_it->duty_cycle = 0.0;
         motor_it->motor_current_a = value / 1000.0;
         motor_it->electrical_rpm = motor_it->motor_current_a * 1000.0;
         break;
@@ -190,6 +199,7 @@ private:
     auto status_1 = make_status_frame(motor, protocol::kStatus1Id);
     write_big_endian(status_1.data, 0, std::llround(motor.electrical_rpm), 4);
     write_big_endian(status_1.data, 4, std::llround(motor.motor_current_a * 10.0), 2);
+    write_big_endian(status_1.data, 6, std::llround(motor.duty_cycle * 1000.0), 2);
     feedback_pub_->publish(status_1);
 
     auto status_2 = make_status_frame(motor, protocol::kStatus2Id);
@@ -239,6 +249,7 @@ private:
       if (steady_now - motor.cmd_at > watchdog_timeout_) {
         motor.electrical_rpm = 0.0;
         motor.motor_current_a = 0.0;
+        motor.duty_cycle = 0.0;
       }
       motor.pos_rad += motor.electrical_rpm * 2.0 * kPi / (60.0 * pole_pairs_) * dt_s;
       if (publish_feedback) {

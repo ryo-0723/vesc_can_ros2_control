@@ -98,6 +98,7 @@ private:
     cfg.max_vel_rad_s = max_rpm * rpm_to_rad_s;
     cfg.vel_slew_rad_s2 = rpm_slew_rate * rpm_to_rad_s;
     cfg.max_current_a = declare_parameter<double>(prefix + "max_current_a", 10.0);
+    cfg.max_duty = declare_parameter<double>(prefix + "max_duty", 1.0);
     cfg.startup_current_a = declare_parameter<double>(prefix + "startup_current_a", 0.0);
     cfg.rpm_threshold = declare_parameter<double>(prefix + "rpm_control_threshold_rpm", 1000.0);
     cfg.startup_timeout = std::chrono::milliseconds(

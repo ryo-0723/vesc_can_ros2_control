@@ -35,9 +35,9 @@ def generate_test_description():
                     "use_mock": "true",
                     "can_tx_topic": "/control_test/can/tx",
                     "can_rx_topic": "/control_test/can/rx",
-                    "urdf": str(control_dir / "urdf/vesc_four_modes.urdf"),
-                    "controllers_file": str(control_dir / "config/controllers_four_modes.yaml"),
-                    "controllers": "joint_state_broadcaster drive_controller steer_controller current_controller hybrid_controller",
+                    "urdf": str(control_dir / "urdf/vesc_five_modes.urdf"),
+                    "controllers_file": str(control_dir / "config/controllers_five_modes.yaml"),
+                    "controllers": "joint_state_broadcaster drive_controller steer_controller current_controller hybrid_controller duty_controller",
                 }.items(),
             ),
             Node(
@@ -65,29 +65,29 @@ def generate_test_description():
             Node(
                 package="vesc_can_driver",
                 executable="fake_vesc_node",
-                name="fake_four_vesc",
+                name="fake_five_vesc",
                 parameters=[
                     {
-                        "controller_ids": [11, 21, 12, 31],
-                        "can_tx_topic": "/four_topic/can/tx",
-                        "can_rx_topic": "/four_topic/can/rx",
+                        "controller_ids": [11, 21, 12, 31, 41],
+                        "can_tx_topic": "/five_topic/can/tx",
+                        "can_rx_topic": "/five_topic/can/rx",
                     }
                 ],
             ),
             Node(
                 package="vesc_can_driver",
                 executable="vesc_node",
-                namespace="four_topic",
+                namespace="five_topic",
                 parameters=[
-                    str(driver_dir / "config/four_modes.yaml"),
+                    str(driver_dir / "config/five_modes.yaml"),
                     {
-                        "can_tx_topic": "/four_topic/can/tx",
-                        "can_rx_topic": "/four_topic/can/rx",
-                        "command_topic": "/four_topic/commands",
-                        "error_topic": "/four_topic/event",
+                        "can_tx_topic": "/five_topic/can/tx",
+                        "can_rx_topic": "/five_topic/can/rx",
+                        "command_topic": "/five_topic/commands",
+                        "error_topic": "/five_topic/event",
                     },
                 ],
-                remappings=[("/diagnostics", "/four_topic/diagnostics")],
+                remappings=[("/diagnostics", "/five_topic/diagnostics")],
             ),
             Node(
                 package="vesc_can_driver",
@@ -178,7 +178,7 @@ class IntegrationTest(unittest.TestCase):
     def observe_frame(self, msg):
         if msg.id >> 8 == 8 and msg.dlc == 3 and bytes(msg.data[:3]) == bytes([254, 2, 29]):
             self.reboot_frames.append(msg.id & 255)
-        if msg.id >> 8 not in (1, 3, 4):
+        if msg.id >> 8 not in (0, 1, 3, 4):
             return  # Fault queries have their own 10 Hz cycle
         self.frame_times.setdefault(msg.id & 255, []).append(time.monotonic())
         self.frames[msg.id & 255] = (
@@ -248,10 +248,10 @@ class IntegrationTest(unittest.TestCase):
         self.node.create_subscription(DiagnosticArray, "/vesc/event", events.append, 10)
         self.node.create_subscription(Frame, "/control_test/can/tx", self.observe_frame, 100)
         self.node.create_subscription(JointState, "/joint_states", self.observe_joints, 10)
-        for name in ("drive_joint", "steer_joint", "current_joint", "hybrid_joint"):
+        for name in ("drive_joint", "steer_joint", "current_joint", "hybrid_joint", "duty_joint"):
             self.node.create_subscription(
                 VescState,
-                "/VescFourModes_can_io/motors/" + name + "/state",
+                "/VescFiveModes_can_io/motors/" + name + "/state",
                 self.observe_vesc_state,
                 10,
             )
@@ -261,19 +261,21 @@ class IntegrationTest(unittest.TestCase):
             Float64MultiArray, "/current_controller/commands", 1
         )
         hybrid_pub = self.node.create_publisher(Float64MultiArray, "/hybrid_controller/commands", 1)
+        duty_pub = self.node.create_publisher(Float64MultiArray, "/duty_controller/commands", 1)
 
         def publish_control_commands():
             vel_pub.publish(Float64MultiArray(data=[2.0]))
             pos_pub.publish(Float64MultiArray(data=[0.25]))
             current_pub.publish(Float64MultiArray(data=[1.5]))
             hybrid_pub.publish(Float64MultiArray(data=[2.0]))
+            duty_pub.publish(Float64MultiArray(data=[0.25]))
 
         deadline = time.monotonic() + 15.0
         while time.monotonic() < deadline:
             response = self.request(
                 ListControllers, "/controller_manager/list_controllers", ListControllers.Request()
             )
-            if len(response.controller) == 5 and all(
+            if len(response.controller) == 6 and all(
                 controller.state == "active" for controller in response.controller
             ):
                 break
@@ -287,6 +289,7 @@ class IntegrationTest(unittest.TestCase):
                 "steer_joint",
                 "current_joint",
                 "hybrid_joint",
+                "duty_joint",
             }:
                 return False
             joint_indices = {name: i for i, name in enumerate(self.joints.name)}
@@ -299,17 +302,19 @@ class IntegrationTest(unittest.TestCase):
         applied = self.wait_for(control_commands_applied, action=publish_control_commands)
         self.assertTrue(
             applied,
-            f"Four modes: joints={self.joints}, frames={self.frames}",
+            f"Five modes: joints={self.joints}, frames={self.frames}",
         )
         self.assertEqual(self.frames[11][0], 3)
         self.assertEqual(self.frames[21][0], 4)
         self.assertEqual(self.frames[12], (1, -1500))
         self.assertEqual(self.frames[31][0], 3)
+        self.assertEqual(self.frames[41], (0, -25000))
         self.assertIn((31, 1, 2000), self.frame_history)
         self.assertTrue(
-            self.wait_for(lambda: len(self.vesc_states) == 4, action=publish_control_commands)
+            self.wait_for(lambda: len(self.vesc_states) == 5, action=publish_control_commands)
         )
         self.assertAlmostEqual(self.vesc_states[12].motor_current_a, -1.5)
+        self.assertAlmostEqual(self.vesc_states[41].duty_cycle, -0.25)
         rate = self.request(
             GetParameters,
             "/controller_manager/get_parameters",
@@ -317,7 +322,7 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertEqual(rate.values[0].integer_value, 100)
         self.measure_rates(publish_control_commands)
-        for id in (11, 21, 12, 31):
+        for id in (11, 21, 12, 31, 41):
             self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
             self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
         self.assert_rate(self.joint_times, 50, "JointState")
@@ -336,15 +341,21 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(response.results[0].successful)
         self.assertTrue(
             self.wait_for(
-                lambda: self.frames == {11: (1, 0), 21: (1, 0), 12: (1, 0), 31: (1, 0)},
+                lambda: self.frames == {id: (1, 0) for id in (11, 21, 12, 31, 41)},
                 action=publish_control_commands,
             ),
-            "Feedback loss must release all four modes",
+            "Feedback loss must release all five modes",
         )
         self.assertTrue(self.wait_for(lambda: len(events) > 0))
         self.assertEqual(
             {status.hardware_id for status in events[-1].status},
-            {"vesc_can_id_11", "vesc_can_id_21", "vesc_can_id_12", "vesc_can_id_31"},
+            {
+                "vesc_can_id_11",
+                "vesc_can_id_21",
+                "vesc_can_id_12",
+                "vesc_can_id_31",
+                "vesc_can_id_41",
+            },
         )
         self.assertTrue(
             all(status.level == status.ERROR and status.message for status in events[-1].status)
@@ -458,9 +469,9 @@ class IntegrationTest(unittest.TestCase):
             "Missing feedback must invalidate telemetry without inventing device faults",
         )
 
-    def test_03_standalone_four_modes_and_invalid_current(self):
-        prefix = "/four_topic/vesc_can_ros2_control"
-        self.node.create_subscription(Frame, "/four_topic/can/tx", self.observe_frame, 100)
+    def test_03_standalone_five_modes_and_invalid_current(self):
+        prefix = "/five_topic/vesc_can_ros2_control"
+        self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(
             VescCommandArray, prefix.rsplit("/", 1)[0] + "/commands", 10
         )
@@ -470,8 +481,8 @@ class IntegrationTest(unittest.TestCase):
         def publish_commands():
             cmd_pub.publish(
                 self.make_commands(
-                    ids=[3, 4, 2, 1],
-                    values=[1.5, 2.0, 0.25, 2.0],
+                    ids=[3, 4, 2, 1, 5],
+                    values=[1.5, 2.0, 0.25, 2.0, 0.25],
                 )
             )
 
@@ -480,6 +491,7 @@ class IntegrationTest(unittest.TestCase):
             21: (4, round(math.degrees(0.25) * 1e6)),
             12: (1, -1500),
             31: (3, 134),
+            41: (0, -25000),
         }
         self.assertTrue(self.wait_for(lambda: self.frames == expected, action=publish_commands))
         self.assertIn((31, 1, 2000), self.frame_history)
@@ -487,22 +499,28 @@ class IntegrationTest(unittest.TestCase):
         def publish_changed_commands():
             cmd_pub.publish(
                 self.make_commands(
-                    ids=[1, 2, 3, 4],
-                    values=[1.0, 0.1, 1.5, 1.0],
+                    ids=[1, 2, 3, 4, 5],
+                    values=[1.0, 0.1, 1.5, 1.0, 0.25],
                 )
             )
 
-        mixed = {11: (3, 67), 21: (4, round(math.degrees(0.1) * 1e6)), 12: (1, -1500), 31: (3, 67)}
+        mixed = {
+            11: (3, 67),
+            21: (4, round(math.degrees(0.1) * 1e6)),
+            12: (1, -1500),
+            31: (3, 67),
+            41: (0, -25000),
+        }
         self.assertTrue(
             self.wait_for(lambda: self.frames == mixed, action=publish_changed_commands)
         )
-        stopped = {id: (1, 0) for id in (11, 21, 12, 31)}
+        stopped = {id: (1, 0) for id in (11, 21, 12, 31, 41)}
 
         def publish_invalid_current():
             cmd_pub.publish(
                 self.make_commands(
-                    ids=[1, 2, 3, 4],
-                    values=[1.0, 0.1, math.nan, 1.0],
+                    ids=[1, 2, 3, 4, 5],
+                    values=[1.0, 0.1, math.nan, 1.0, 0.25],
                 )
             )
 
@@ -516,25 +534,26 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: self.frames == stopped))
 
     def test_04_standalone_invalid_ids_and_values(self):
-        prefix = "/four_topic/vesc_can_ros2_control"
-        self.node.create_subscription(Frame, "/four_topic/can/tx", self.observe_frame, 100)
+        prefix = "/five_topic/vesc_can_ros2_control"
+        self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(
             VescCommandArray, prefix.rsplit("/", 1)[0] + "/commands", 10
         )
         self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
         reboot_srv = prefix + "/reboot"
-        ids = [1, 2, 3, 4]
+        ids = [1, 2, 3, 4, 5]
 
         def publish_commands():
-            cmd_pub.publish(self.make_commands(ids=ids, values=[1.0, 0.1, 1.5, 1.0]))
+            cmd_pub.publish(self.make_commands(ids=ids, values=[1.0, 0.1, 1.5, 1.0, 0.25]))
 
-        stopped = {id: (1, 0) for id in (11, 21, 12, 31)}
+        stopped = {id: (1, 0) for id in (11, 21, 12, 31, 41)}
         for invalid in (
             VescCommandArray(commands=[VescCommand(motor_id=11, value=1.0)]),
             self.make_commands(ids=[1, 1], values=[1.0, 2.0]),
             VescCommandArray(commands=[VescCommand(motor_id=1, value=math.inf)]),
             VescCommandArray(commands=[VescCommand(motor_id=2, value=2.0)]),
             VescCommandArray(commands=[VescCommand(motor_id=3, value=4.0)]),
+            VescCommandArray(commands=[VescCommand(motor_id=5, value=0.75)]),
         ):
             with self.subTest(commands=invalid.commands):
                 self.assertTrue(self.reboot(reboot_srv).success)
@@ -555,8 +574,8 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(self.frames, stopped)
 
     def test_05_standalone_partial_commands_keep_other_motor_timeouts(self):
-        prefix = "/four_topic/vesc_can_ros2_control"
-        self.node.create_subscription(Frame, "/four_topic/can/tx", self.observe_frame, 100)
+        prefix = "/five_topic/vesc_can_ros2_control"
+        self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(
             VescCommandArray, prefix.rsplit("/", 1)[0] + "/commands", 10
         )
@@ -567,8 +586,8 @@ class IntegrationTest(unittest.TestCase):
         def publish_commands():
             cmd_pub.publish(
                 self.make_commands(
-                    ids=[1, 2, 3, 4],
-                    values=[1.0, 0.1, 1.5, 1.0],
+                    ids=[1, 2, 3, 4, 5],
+                    values=[1.0, 0.1, 1.5, 1.0, 0.25],
                 )
             )
 
@@ -583,12 +602,12 @@ class IntegrationTest(unittest.TestCase):
 
         def publish_partial_commands():
             cmd_pub.publish(self.make_commands(ids=[3], values=[0.5]))
-            cmd_pub.publish(self.make_commands(ids=[4, 1], values=[1.0, 1.0]))
+            cmd_pub.publish(self.make_commands(ids=[4, 1, 5], values=[1.0, 1.0, 0.25]))
 
         self.assertTrue(
             self.wait_for(lambda: self.frames.get(12) == (1, -500), action=publish_partial_commands)
         )
-        stopped = {id: (1, 0) for id in (11, 21, 12, 31)}
+        stopped = {id: (1, 0) for id in (11, 21, 12, 31, 41)}
         self.assertTrue(
             self.wait_for(
                 lambda: self.frames == stopped, timeout=1.0, action=publish_partial_commands
@@ -710,14 +729,16 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(response.values[0].string_value, "current_velocity")
 
     def test_08_command_stamp_does_not_change_receive_timeout(self):
-        self.node.create_subscription(Frame, "/four_topic/can/tx", self.observe_frame, 100)
-        cmd_pub = self.node.create_publisher(VescCommandArray, "/four_topic/commands", 10)
+        self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
+        cmd_pub = self.node.create_publisher(VescCommandArray, "/five_topic/commands", 10)
         self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
-        reboot_srv = "/four_topic/vesc_can_ros2_control/reboot"
+        reboot_srv = "/five_topic/vesc_can_ros2_control/reboot"
         for stamp in (Time(sec=-1, nanosec=42), Time(sec=2147483647, nanosec=42)):
             with self.subTest(stamp=stamp):
                 self.assertTrue(self.reboot(reboot_srv).success)
-                cmd = self.make_commands(ids=[1, 2, 3, 4], values=[1.0, 0.1, 1.5, 1.0], stamp=stamp)
+                cmd = self.make_commands(
+                    ids=[1, 2, 3, 4, 5], values=[1.0, 0.1, 1.5, 1.0, 0.25], stamp=stamp
+                )
                 self.assertTrue(
                     self.wait_for(
                         lambda: self.frames.get(11) == (3, 67)
@@ -728,7 +749,7 @@ class IntegrationTest(unittest.TestCase):
                 )
                 self.assertTrue(
                     self.wait_for(
-                        lambda: self.frames == {id: (1, 0) for id in (11, 21, 12, 31)},
+                        lambda: self.frames == {id: (1, 0) for id in (11, 21, 12, 31, 41)},
                         timeout=1.0,
                     ),
                     "Old/future sender timestamps must not change the local receive timeout",
@@ -862,6 +883,69 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertFalse(
             any(name.endswith("/enable") for name, _ in self.node.get_service_names_and_types())
+        )
+
+    def test_11_duty_ratio_direction_and_startup_mode_remain_fixed(self):
+        prefix = "/five_topic/vesc_can_ros2_control"
+        self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
+        self.node.create_subscription(
+            VescState, prefix + "/motors/duty_joint/state", self.observe_vesc_state, 10
+        )
+        cmd_pub = self.node.create_publisher(VescCommandArray, "/five_topic/commands", 10)
+        self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
+        self.assertTrue(self.reboot(prefix + "/reboot").success)
+        cmd = self.make_commands(ids=[1, 2, 3, 4, 5], values=[1.0, 0.1, 1.5, 1.0, 0.25])
+        send = lambda: cmd_pub.publish(cmd)
+        self.assertTrue(
+            self.wait_for(
+                lambda: self.frames.get(41) == (0, -25000)
+                and 41 in self.vesc_states
+                and self.vesc_states[41].duty_cycle == -0.25,
+                action=send,
+            )
+        )
+        for param_name in ("control_mode", "command_interface"):
+            response = self.request(
+                SetParameters,
+                prefix + "/set_parameters",
+                SetParameters.Request(
+                    parameters=[
+                        Parameter(
+                            name="duty_joint." + param_name,
+                            value=ParameterValue(
+                                type=ParameterType.PARAMETER_STRING, string_value="velocity"
+                            ),
+                        )
+                    ]
+                ),
+                action=send,
+            )
+            self.assertFalse(response.results[0].successful)
+        response = self.request(
+            GetParameters,
+            prefix + "/get_parameters",
+            GetParameters.Request(
+                names=["duty_joint.control_mode", "duty_joint.command_interface"]
+            ),
+            action=send,
+        )
+        self.assertEqual([value.string_value for value in response.values], ["duty_cycle"] * 2)
+        for value, payload, feedback in ((-0.5, 50000, 0.5), (0.0, 0, 0.0)):
+            cmd.commands[-1].value = value
+            expected_packet = 0 if value else 1  # Zero releases motor current.
+            self.assertTrue(
+                self.wait_for(
+                    lambda: self.frames.get(41) == (expected_packet, payload)
+                    and self.vesc_states[41].duty_cycle == feedback,
+                    action=send,
+                )
+            )
+        cmd.commands[-1].value = 0.75
+        self.assertTrue(
+            self.wait_for(
+                lambda: self.frames == {id: (1, 0) for id in (11, 21, 12, 31, 41)},
+                action=send,
+            )
         )
 
 

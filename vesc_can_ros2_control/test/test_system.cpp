@@ -66,7 +66,7 @@ TEST_F(SystemConfigurationTest, PositionDefaultsPreservePiPrecision)
 
 TEST_F(SystemConfigurationTest, RejectsUnsupportedOrAmbiguousCommandInterfaces)
 {
-  for (const auto &mode : {"effort", "duty_cycle"}) {
+  for (const auto &mode : {"effort", "unknown"}) {
     SCOPED_TRACE(mode);
     auto params = make_parameters();
     params.hardware_info.joints[0].command_interfaces[0].name = mode;
@@ -107,9 +107,9 @@ TEST_F(SystemConfigurationTest, RejectsInvalidNumericMotorSettings)
     EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
   }
 }
-TEST_F(SystemConfigurationTest, SupportsCurrentAndCurrentVelocityInterfaces)
+TEST_F(SystemConfigurationTest, SupportsAllFiveModeInterfaces)
 {
-  for (const auto &mode : {"current", "velocity", "position", "current_velocity"}) {
+  for (const auto &mode : {"current", "velocity", "position", "duty_cycle", "current_velocity"}) {
     SCOPED_TRACE(mode);
     auto params = make_parameters();
     auto &joint = params.hardware_info.joints[0];
@@ -139,6 +139,19 @@ TEST_F(SystemConfigurationTest, RejectsMismatchedOrIncompleteHybridSettings)
   params.hardware_info.joints[0].parameters["max_current_a"] = "1.0";
   VescSystem excess_current;
   EXPECT_EQ(excess_current.init(params), hardware_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(SystemConfigurationTest, RejectsInvalidDutyLimits)
+{
+  for (const auto &value : {"0", "-0.5", "1.1", "nan"}) {
+    auto params = make_parameters();
+    auto &joint = params.hardware_info.joints[0];
+    joint.command_interfaces[0].name = "duty_cycle";
+    joint.state_interfaces[0].name = "duty_cycle";
+    joint.parameters["max_duty"] = value;
+    VescSystem hardware;
+    EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
+  }
 }
 
 TEST_F(SystemConfigurationTest, RejectsInvalidHardwarePeriods)

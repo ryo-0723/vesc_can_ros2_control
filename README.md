@@ -10,15 +10,17 @@ have different hardware APIs and have not been validated. The C++ library explic
 requires C++20, matching the Lyrical dependencies. This is a development
 package; no ROS apt release or physical-hardware validation is claimed.
 
-Local validation (2026-10-15): Lyrical build and all 58 test cases passed with
+Local validation (2026-10-15): Lyrical build and all 63 test cases passed with
 `rmw_fastrtps_cpp`, including standalone and ros2_control integration tests.
 Installed C++ library and independent command/state message usage also passed.
 See the [validation report](docs/validation.md). The physical CAN bus
 and Zenoh pico gateway have not been exercised.
 
 Motor modes: `current` (motor A signed in the joint direction), `velocity` (joint rad/s),
-`position` (joint rad), and `current_velocity` (current startup followed by velocity control).
-Both standalone and ros2_control use the same driver functions for all four modes.
+`position` (joint rad), `duty_cycle` (signed duty ratio), and
+`current_velocity` (current startup followed by velocity control).
+Both standalone and ros2_control use the same driver functions for all five modes.
+Select each motor\'s mode at startup; standalone uses YAML `control_mode`.
 
 Default rates: CAN commands are sent at 100 Hz per motor; ros2_control state interfaces
 update at 100 Hz. Per-motor VescState topics publish at 50 Hz in both frontends.
@@ -104,7 +106,7 @@ black --line-length 100 vesc_can_driver/launch vesc_can_ros2_control/launch \
 The standalone API uses VescCommandArray commands, VescState and standard diagnostics; see the
 [migration guide](docs/messages.md). C++ users must update the renamed identifiers:
 `ControlMode::Current`, `ControlMode::Velocity`, `ControlMode::Position`,
-and `ControlMode::CurrentVelocity`, `kPi`, `kUnknownValue`, the protocol's `k*Id` constants,
+`ControlMode::DutyCycle`, and `ControlMode::CurrentVelocity`, `kPi`, `kUnknownValue`, the protocol's `k*Id` constants,
 and `DriverCore::motor_configs()`. PC-side `enable/disable/enabled` have been renamed
 to `activate/deactivate/active`; the standalone activation service is replaced by `~/reboot`. Logical IDs are configured only in the standalone node, and
 `CanTransport::set_command()` takes a motor index.

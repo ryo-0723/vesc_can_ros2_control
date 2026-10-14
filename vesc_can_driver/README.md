@@ -13,7 +13,7 @@ VESC のネイティブ CAN フレームを encode/decode するライブラリ�
 | CMake target | ヘッダ | 役割 |
 |---|---|---|
 | vesc_can_driver::protocol | vesc_can_driver/vesc_protocol.hpp | 動作指令・故障問い合わせの encode、STATUS1〜6・故障応答の decode |
-| vesc_can_driver::driver | vesc_can_driver/vesc_driver.hpp | モータ設定・状態、4 モードの制御、CAN の周期送受信、専用 executor と最新指令の受け渡し |
+| vesc_can_driver::driver | vesc_can_driver/vesc_driver.hpp | モータ設定・状態、5 モードの制御、CAN の周期送受信、専用 executor と最新指令の受け渡し |
 | vesc_can_driver::state | vesc_can_driver/vesc_state.hpp | VescState への変換とモータごとの VescState 配信を両入口で共用 |
 
 encode/decode だけを使う場合は protocol target にリンクします。このライブラリは
@@ -83,7 +83,9 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 
 `VescCommandArray.commands` の各要素は `uint8 motor_id / float32 value` です
 配列の順序は `motors` の登録順と違っても使えます
-電流モードはモータ A（関節方向の符号）、速度・電流＋速度は関節 rad/s、位置は関節 rad です
+電流モードはモータ A（関節方向の符号）、速度・速度＋電流は関節 rad/s、位置は関節 rad です
+duty_cycle は関節方向の比率 [-1, 1] で、0.5 が 50% です
+duty の符号は direction、上限は max_duty（既定 1.0）で設定します
 制御モードは YAML の control_mode で起動時に固定し、指令に mode は持たせません
 通常ノードは control_mode / command_interface パラメータの起動後の変更も拒否します
 配列の stamp に生成時の ROS 時刻を入れます
@@ -121,9 +123,9 @@ C++ / Python の利用例は [vesc_can_msgs](../vesc_can_msgs/README.md) を参�
 通常ノードだけの従来設定 max_rpm / rpm_slew_rate はモータ機械 RPM / RPM毎秒です。
 pole_pairs の既定は 7。startup_current_a の既定は **0** に変更しており、
 直接 RPM 制御します。電流始動は `control_mode: current_velocity` で選択し、
-startup_timeout_ms (既定 1000) で打ち切ります。hardware plugin も同じ 4 モードを使います。
+startup_timeout_ms (既定 1000) で打ち切ります。hardware plugin も同じ 5 モードを使います。
 電流モードは `control_mode: current`、指令上限は max_current_a (既定 10 A) です。
-電流を含む全 4 モードを VescCommandArray で受け付けます
+電流を含む全 5 モードを VescCommandArray で受け付けます
 CAN トピックのパラメータ未指定時の既定値は従来の /socketcan_bridge/tx と /rx です。
 
 ## rox2026 と同じ形式の YAML
@@ -248,7 +250,8 @@ VESC 6.06 には停止時間を経過し DRV fault が解消すると故障番�
 動作指令の Frame は拡張 ID、DLC=4、固定 8 バイト配列の先頭 4 バイトを使用します
 故障問い合わせは DLC=7、応答は DLC=8 も中継してください
 ID は `(packet_id << 8) | controller_id`、値は big endian の符号付き int32。
-SET_CURRENT=1 (A×1000)、SET_RPM=3 (ERPM)、SET_POS=4 (deg×1e6) を使用します。
+SET_DUTY=0 (比率×100000)、SET_CURRENT=1 (A×1000)、SET_RPM=3 (ERPM)、SET_POS=4 (deg×1e6) を使用します
+SET_DUTY も拡張 ID で、ID の数値が小さい場合も is_extended=true が必要です
 受信は STATUS1=9、STATUS2=14、STATUS3=15、STATUS4=16、STATUS5=27、STATUS6=58。
 デコードの基準は VESC firmware 6.06 (`release_6_06` の固定 commit) です。
 公式送信形式はすべて DLC=8 です。STATUS5 は末尾 2 バイトが予約領域です。

@@ -79,6 +79,29 @@ TEST(Protocol, CommandsHaveNativeIdAndBigEndianSignedPayload)
   EXPECT_THROW(protocol::make_set_position_frame(11, 1e20), std::out_of_range);
 }
 
+TEST(Protocol, DutyCommandsUseVesc6SignedRatioAndRejectInvalidInputs)
+{
+  auto frame = protocol::make_set_duty_frame(41, 0.5);
+  EXPECT_EQ(frame.id, 0x29u);
+  EXPECT_TRUE(frame.is_extended);
+  EXPECT_FALSE(frame.is_rtr);
+  EXPECT_FALSE(frame.is_error);
+  EXPECT_EQ(frame.dlc, 4);
+  EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{0, 0, 0xC3, 0x50, 0, 0, 0, 0}));
+  frame = protocol::make_set_duty_frame(41, -0.25);
+  EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{0xFF, 0xFF, 0x9E, 0x58, 0, 0, 0, 0}));
+  EXPECT_EQ(protocol::make_set_duty_frame(0, 1.0).data,
+    (std::array<std::uint8_t, 8>{0, 1, 0x86, 0xA0, 0, 0, 0, 0}));
+  EXPECT_EQ(protocol::make_set_duty_frame(254, -1.0).data,
+    (std::array<std::uint8_t, 8>{0xFF, 0xFE, 0x79, 0x60, 0, 0, 0, 0}));
+  EXPECT_EQ(protocol::make_set_duty_frame(41, 0.0).data, (std::array<std::uint8_t, 8>{}));
+  for (double value : {1.01, -1.01, kUnknownValue, std::numeric_limits<double>::infinity(),
+         -std::numeric_limits<double>::infinity()}) {
+    EXPECT_THROW(protocol::make_set_duty_frame(41, value), std::out_of_range);
+  }
+  EXPECT_THROW(protocol::make_set_duty_frame(255, 0.5), std::invalid_argument);
+}
+
 TEST(Protocol, FaultQueryMatchesVesc6SelectiveShortBufferWireFormat)
 {
   const auto request = protocol::make_fault_request(11, 254);
@@ -682,6 +705,9 @@ TEST(Core, ModeSelectionValidatesCommandInterfaces)
   EXPECT_EQ(resolve_control_mode("", "current"), ControlMode::Current);
   EXPECT_EQ(resolve_control_mode("", "velocity"), ControlMode::Velocity);
   EXPECT_EQ(resolve_control_mode("", "position"), ControlMode::Position);
+  EXPECT_EQ(resolve_control_mode("", "duty_cycle"), ControlMode::DutyCycle);
+  EXPECT_EQ(resolve_control_mode("duty_cycle", "duty_cycle"), ControlMode::DutyCycle);
+  EXPECT_THROW(resolve_control_mode("duty_cycle", "velocity"), std::invalid_argument);
   EXPECT_EQ(resolve_control_mode("current_velocity", "velocity"), ControlMode::CurrentVelocity);
   EXPECT_THROW(resolve_control_mode("current_velocity", "current"), std::invalid_argument);
   EXPECT_THROW(resolve_control_mode("velocity", "position"), std::invalid_argument);
@@ -729,7 +755,56 @@ TEST(Core, CurrentCommandsUseAmpsDirectionAndSharedStops)
   }
 }
 
-TEST(Core, FourModesShareFeedbackTimeoutAndExplicitRecovery)
+TEST(Core, DutyUsesDirectionAndConfiguredLimitWithSharedStops)
+{
+  auto duty = make_motor_config(41);
+  duty.mode = ControlMode::DutyCycle;
+  duty.direction = -1.0;
+  duty.gear_ratio = 4.0;  // Duty is unaffected by gearing or pole pairs.
+  duty.max_duty = 0.5;
+  auto current = make_motor_config(12);
+  current.mode = ControlMode::Current;
+  DriverCore driver({duty, current});
+  const auto now = TimePoint(1s);
+  ASSERT_TRUE(driver.receive(make_status_1_frame(41), now));
+  ASSERT_TRUE(driver.receive(make_status_1_frame(12), now));
+  ASSERT_TRUE(driver.activate(now));
+  ASSERT_TRUE(driver.set_command(0, 0.25, now));
+  ASSERT_TRUE(driver.set_command(1, 1.5, now));
+  std::vector<can_msgs::msg::Frame> frames;
+  driver.command_frames(now, frames);
+  ASSERT_EQ(frames.size(), 2u);
+  EXPECT_EQ(frames[0].id, 0x29u);
+  EXPECT_EQ(frames[0].data, (std::array<std::uint8_t, 8>{0xFF, 0xFF, 0x9E, 0x58, 0, 0, 0, 0}));
+  ASSERT_TRUE(driver.set_command(0, -0.5, now));
+  driver.command_frames(now, frames);
+  EXPECT_EQ(frames[0].data, (std::array<std::uint8_t, 8>{0, 0, 0xC3, 0x50, 0, 0, 0, 0}));
+  ASSERT_TRUE(driver.set_command(0, 0.0, now));
+  driver.command_frames(now, frames);
+  EXPECT_EQ(frames[0].id, 0x129u);  // Zero releases current, just like velocity/current modes.
+  EXPECT_EQ(frames[0].data, (std::array<std::uint8_t, 8>{}));
+  EXPECT_TRUE(command_is_valid(duty, 0.5));
+  EXPECT_TRUE(command_is_valid(duty, -0.5));
+  EXPECT_FALSE(driver.set_command(0, 0.51, now));
+  EXPECT_TRUE(driver.faulted());
+  driver.command_frames(now, frames);
+  for (const auto &frame : frames) {
+    EXPECT_EQ(frame.id >> 8, 1u);
+    EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{}));
+  }
+}
+
+TEST(Core, DutyLimitsRejectNonFiniteOrOutOfRangeConfiguration)
+{
+  auto duty = make_motor_config(41);
+  duty.mode = ControlMode::DutyCycle;
+  for (double limit : {0.0, -0.5, 1.01, kUnknownValue, std::numeric_limits<double>::infinity()}) {
+    duty.max_duty = limit;
+    EXPECT_THROW(validate_configs({duty}), std::invalid_argument);
+  }
+}
+
+TEST(Core, FiveModesShareCommandTimeoutAndExplicitRecovery)
 {
   auto current = make_motor_config(12);
   current.mode = ControlMode::Current;
@@ -739,25 +814,28 @@ TEST(Core, FourModesShareFeedbackTimeoutAndExplicitRecovery)
   hybrid.mode = ControlMode::CurrentVelocity;
   hybrid.startup_current_a = 2.0;
   hybrid.rpm_threshold = 100.0;
-  DriverCore driver({current, make_motor_config(), steer, hybrid});
+  auto duty = make_motor_config(41);
+  duty.mode = ControlMode::DutyCycle;
+  DriverCore driver({current, make_motor_config(), steer, hybrid, duty});
   const auto start = TimePoint(1s);
-  for (auto id : {12, 11, 21, 31}) {
+  for (auto id : {12, 11, 21, 31, 41}) {
     auto feedback = make_status_1_frame(id);
     feedback.data.fill(0);
     driver.receive(feedback, start);
   }
   driver.receive(make_status_4_frame(), start);
   ASSERT_TRUE(driver.activate(start));
-  for (std::size_t i = 0; i < 4; ++i) {
-    ASSERT_TRUE(driver.set_command(i, i == 3 ? 10.0 : 1.0, start));
+  for (std::size_t i = 0; i < 5; ++i) {
+    ASSERT_TRUE(driver.set_command(i, i == 3 ? 10.0 : (i == 4 ? 0.25 : 1.0), start));
   }
   std::vector<can_msgs::msg::Frame> frames;
   driver.command_frames(start + 10ms, frames);
-  ASSERT_EQ(frames.size(), 4u);
+  ASSERT_EQ(frames.size(), 5u);
   EXPECT_EQ(frames[0].id, 0x10Cu);
   EXPECT_EQ(frames[1].id, 0x30Bu);
   EXPECT_EQ(frames[2].id, 0x415u);
   EXPECT_EQ(frames[3].id, 0x11Fu);
+  EXPECT_EQ(frames[4].id, 0x29u);
   driver.command_frames(start + 101ms, frames);
   ASSERT_TRUE(driver.faulted());
   for (const auto &frame : frames) {

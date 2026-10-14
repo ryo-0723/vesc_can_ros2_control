@@ -12,6 +12,7 @@ namespace
 {
 constexpr std::size_t kCommandPayloadSize = 4;
 constexpr std::uint8_t kStatusPayloadSize = 8;
+constexpr double kDutyCommandScale = 100000.0;
 constexpr double kCurrentCommandScale = 1000.0;
 constexpr double kPositionCommandScale = 1000000.0;
 
@@ -113,6 +114,15 @@ bool decode_fault_reply(const can_msgs::msg::Frame &frame, std::uint8_t host_id,
   }
   fault = {frame.data[0], frame.data[7]};
   return true;
+}
+
+can_msgs::msg::Frame make_set_duty_frame(std::uint8_t controller_id, double duty)
+{
+  if (!std::isfinite(duty) || std::abs(duty) > 1.0) {
+    throw std::out_of_range("Duty command must be finite and in [-1, 1]");
+  }
+  return make_command_frame(
+    controller_id, kSetDutyId, scale_command_value(duty, kDutyCommandScale));
 }
 
 can_msgs::msg::Frame make_set_rpm_frame(std::uint8_t controller_id, std::int32_t electrical_rpm)

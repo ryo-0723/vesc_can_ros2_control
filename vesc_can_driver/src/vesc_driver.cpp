@@ -25,6 +25,9 @@ ControlMode parse_control_mode(std::string_view mode_name)
   if (mode_name == "current_velocity") {
     return ControlMode::CurrentVelocity;
   }
+  if (mode_name == "duty_cycle") {
+    return ControlMode::DutyCycle;
+  }
   throw std::invalid_argument("Unsupported control mode: " + std::string(mode_name));
 }
 
@@ -38,6 +41,8 @@ std::string_view command_interface(ControlMode mode)
       return "velocity";
     case ControlMode::Position:
       return "position";
+    case ControlMode::DutyCycle:
+      return "duty_cycle";
   }
   throw std::invalid_argument("Unsupported control mode");
 }
@@ -79,9 +84,9 @@ double deg_to_pos(const MotorConfig &cfg, double pid_pos_deg)
          cfg.direction / cfg.gear_ratio;
 }
 
-double apply_direction(const MotorConfig &cfg, double current_a)
+double apply_direction(const MotorConfig &cfg, double value)
 {
-  return current_a * cfg.direction;
+  return value * cfg.direction;
 }
 
 // Configuration validation.
@@ -92,8 +97,8 @@ void validate_config(const MotorConfig &cfg)
 {
   command_interface(cfg.mode);  // Reject invalid enum values as well.
   const std::array numeric_settings = {cfg.pole_pairs, cfg.gear_ratio, cfg.direction,
-    cfg.zero_offset_rad, cfg.max_vel_rad_s, cfg.max_current_a, cfg.min_pos_rad, cfg.max_pos_rad,
-    cfg.vel_slew_rad_s2, cfg.startup_current_a, cfg.rpm_threshold};
+    cfg.zero_offset_rad, cfg.max_vel_rad_s, cfg.max_current_a, cfg.max_duty, cfg.min_pos_rad,
+    cfg.max_pos_rad, cfg.vel_slew_rad_s2, cfg.startup_current_a, cfg.rpm_threshold};
   for (double setting_value : numeric_settings) {
     if (!std::isfinite(setting_value)) {
       throw std::invalid_argument(cfg.name + ": non-finite setting");
@@ -106,6 +111,9 @@ void validate_config(const MotorConfig &cfg)
       cfg.feedback_timeout.count() <= 0 || cfg.command_timeout.count() <= 0 ||
       cfg.startup_timeout.count() <= 0) {
     throw std::invalid_argument(cfg.name + ": invalid motor limits or timing");
+  }
+  if (cfg.max_duty <= 0.0 || cfg.max_duty > 1.0) {
+    throw std::invalid_argument(cfg.name + ": max_duty must be in (0, 1]");
   }
   const double max_erpm = std::abs(vel_to_erpm(cfg, cfg.max_vel_rad_s));
   if (is_velocity_mode(cfg.mode) &&
@@ -164,6 +172,8 @@ bool command_is_valid(const MotorConfig &cfg, double value)
   switch (cfg.mode) {
     case ControlMode::Current:
       return std::abs(value) <= cfg.max_current_a;
+    case ControlMode::DutyCycle:
+      return std::abs(value) <= cfg.max_duty;
     case ControlMode::Velocity:
     case ControlMode::CurrentVelocity:
       return std::abs(value) <= cfg.max_vel_rad_s;
@@ -282,7 +292,7 @@ bool DriverCore::receive_fault(const protocol::FaultCode &fault, TimePoint now)
   return true;
 }
 
-// Command activation, deadlines and four-mode frame generation.
+// Command activation, deadlines and five-mode frame generation.
 bool DriverCore::ready(TimePoint now) const
 {
   for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
@@ -409,6 +419,8 @@ std::optional<can_msgs::msg::Frame> DriverCore::make_frame(std::size_t idx, Time
   switch (cfg.mode) {
     case ControlMode::Current:
       return make_current_frame(cfg, cmd.target);
+    case ControlMode::DutyCycle:
+      return protocol::make_set_duty_frame(cfg.controller_id, apply_direction(cfg, cmd.target));
     case ControlMode::Position:
       return protocol::make_set_position_frame(cfg.controller_id, pos_to_deg(cfg, cmd.target));
     case ControlMode::CurrentVelocity: {

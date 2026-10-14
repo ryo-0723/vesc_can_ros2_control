@@ -11,6 +11,7 @@ constexpr std::uint32_t kControllerIdMask = 0xFF;
 constexpr std::uint32_t kPacketIdShift = 8;
 constexpr std::uint32_t kExtendedCanIdMask = 0x1FFFFFFF;
 
+constexpr std::uint32_t kSetDutyId = 0;
 constexpr std::uint32_t kSetCurrentId = 1;
 constexpr std::uint32_t kSetRpmId = 3;
 constexpr std::uint32_t kSetPositionId = 4;
@@ -89,6 +90,13 @@ struct Status6
   double adc_3_v{};
   double ppm{};  // normalized PPM input, dimensionless
 };
+
+/// @brief duty 比の指令フレームを生成
+/// @param controller_id 宛先 ID（0〜254）
+/// @param duty VESC 方向の比率 [-1, 1]，0.5 は 50%
+/// @return 拡張 CAN フレーム（DLC=4），比率を 100000 倍して格納
+/// @throws std::out_of_range 非有限値または比率の範囲外
+can_msgs::msg::Frame make_set_duty_frame(std::uint8_t controller_id, double duty);
 
 /// @brief ERPM の速度指令フレームを生成
 /// @param controller_id 宛先 ID（0〜254）

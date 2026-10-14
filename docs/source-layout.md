@@ -6,7 +6,7 @@
 | ファイル | 役割 | 利用先 |
 |---|---|---|
 | `vesc_can_driver/src/vesc_protocol.cpp` | VESC 6 の CAN ID・ペイロード形式、動作指令・故障問い合わせの encode、STATUS1〜6・故障応答の decode | `vesc_can_driver::protocol` |
-| `vesc_can_driver/src/vesc_driver.cpp` | モータ設定、単位変換、状態更新、4 モードの指令、CAN の周期送受信・停止管理 | `vesc_can_driver::driver` |
+| `vesc_can_driver/src/vesc_driver.cpp` | モータ設定、単位変換、状態更新、5 モードの指令、CAN の周期送受信・停止管理 | `vesc_can_driver::driver` |
 | `vesc_can_driver/src/vesc_node.cpp` | 通常ノードのパラメータ、指令トピック、再起動サービス、モータ状態と診断 | `vesc_node` |
 | `vesc_can_driver/src/vesc_state.cpp` | VescState への変換、モータごとの状態配信、即時の異常通知 | `vesc_can_driver::state` |
 | `vesc_can_ros2_control/src/vesc_system.cpp` | ros2_control の設定、lifecycle、state / command interface の受け渡し | `vesc_hardware` |
@@ -46,10 +46,10 @@ driver target は CAN 通信のため rclcpp を使いますが、ros2_control �
 1. モードの選択と単位変換。
 2. 設定・指令範囲・フィードバック鮮度の検査。
 3. STATUS1〜6 の受信と状態更新。
-4. 有効化・停止・指令期限と 4 モードのフレーム生成。
+4. 有効化・停止・指令期限と 5 モードのフレーム生成。
 5. ROS の CAN 通信、指令の受け渡し、周期送信。
 
-4 モードは `DriverCore::make_frame()` の一つの分岐で扱います。
+5 モードは `DriverCore::make_frame()` の一つの分岐で扱います。
 電流起動後は速度モードと同じ速度ランプへ進み、電流モード・電流起動・停止は
 内部の `make_current_frame()` を共用します。全台の事前検査は `check_commands()`、
 送信時刻の付与と停止要求の反映は `CanTransport::publish_frames()` が担当します。
@@ -67,7 +67,8 @@ driver target は CAN 通信のため rclcpp を使いますが、ros2_control �
 通常ノードでは reboot サービスによる再起動後の新しい指令で復旧します
 CanTransport::reboot() は CAN executor に要求を渡し、protocol::make_reboot_frame() で指定した 1 台を再起動します
 
-このドライバの動作指令は SET_CURRENT / SET_RPM / SET_POS の 3 種類です。
+このドライバの動作指令は SET_DUTY / SET_CURRENT / SET_RPM / SET_POS の 4 種類です
+SET_DUTY の比率は direction で符号を合わせ、protocol が 100000 倍して格納します
 `current_velocity` は SET_CURRENT で起動して SET_RPM へ移るホスト側の制御モードです。
 
 ## 通信・ROS・起動設定の変数名

@@ -13,6 +13,7 @@
       - steer_joint
       - current_joint
       - hybrid_joint
+      - duty_joint
 
     drive_joint:
       logical_id: 1
@@ -52,5 +53,15 @@
       startup_current_a: 2.0
       rpm_control_threshold_rpm: 50.0
       startup_timeout_ms: 1000
+      feedback_timeout_ms: 300
+      command_timeout_ms: 300
+
+    duty_joint:
+      logical_id: 5
+      controller_id: 41
+      control_mode: duty_cycle
+      pole_pairs: 7.0
+      direction: -1.0
+      max_duty: 0.5
       feedback_timeout_ms: 300
       command_timeout_ms: 300

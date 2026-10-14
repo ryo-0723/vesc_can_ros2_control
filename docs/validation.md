@@ -2,7 +2,7 @@
 
 各節は検証当時の構成を記録しています
 旧 vesc_msgs と上流定義への言及は過去の記録で、現在は独自の vesc_can_msgs に統合しています
-最新結果は [独自状態 msg と統合後の検証](#独自状態-msg-と統合後の検証) を参照してください
+最新結果は [5 モードの検証](#5-モードの検証) を参照してください
 
 ## 初回の公開準備 — 2026-10-13
 
@@ -520,3 +520,33 @@ ros2_control の state interface は controller_manager の 100 Hz 設定を維�
 全 C++ の clang-format、Python の Black、package.xml と文書のローカルリンク、git diff --check も確認しました
 ソースは読み取り専用でマウントし、ビルド・検証用の出力はリポジトリ外に置きました
 今回の動作検証は模擬 CAN で、実 CAN バス・モータ・Zenoh pico での確認は実施していません
+
+
+## 5 モードの検証
+
+2026-10-15、velocity / current / position / duty_cycle / current_velocity の 5 モードに対応しました
+duty 比は direction で符号を合わせ、公式 VESC 6.06 の SET_DUTY=0 / 比率×100000 / DLC=4 で送信します
+max_duty は 0 < max_duty ≤ 1 の指令上限で、通常ノードの YAML と hardware joint param から読み込みます
+control_mode と command_interface は起動時に決まり、通常ノードの変更要求は拒否します
+
+設定例を five_modes.yaml、controllers_five_modes.yaml、vesc_five_modes.urdf に更新しました
+旧 four_modes の設定例はこの 5 モード版へ置き換えています
+通常ノードと hardware plugin は同じ DriverCore の変換・範囲検査・フレーム生成を使用します
+
+ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=181 で **63 ケースが成功** しました
+colcon test-result は実行単位 5 件を含む **68 tests, 0 errors, 0 failures, 0 skipped** です
+
+- 公式の既知バイト列で duty の正負・倍率・拡張 ID・DLC を確認
+- duty ±1 の境界、NaN/Inf、比率の範囲外、broadcast 宛先を検査
+- duty の方向変換と、減速比・極対数を掛けないことを確認
+- duty の上限とゼロ指令、5 モード混在時の指令期限・停止・復旧を確認
+- hardware の duty_cycle command / state interface と設定上限を検査
+- 通常ノードと controller_manager の 5 台構成で、duty の送信値と VescState の生値を確認
+- 実行中の duty モードと command interface の変更拒否を確認
+- 故障通知、論理 ID を指定した再起動、旧指令を再利用しない復旧を確認
+
+5 台の hardware 模擬構成で、各モータの CAN 動作指令は約 100 Hz、VescState は約 50 Hz でした
+JointState は約 50 Hz、controller_manager は 100 Hz の設定を維持しています
+ドライバ単体と hardware plugin のビルド、公開 CMake target の外部利用も成功しました
+Python の書式を Black で統一し、C++ / Python の書式と文書の参照を検査しました
+検証は模擬 CAN で、実機へ動作指令は送信していません

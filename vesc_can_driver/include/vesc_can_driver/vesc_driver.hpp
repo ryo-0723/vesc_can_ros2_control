@@ -29,13 +29,14 @@ enum class ControlMode
   Current,
   Velocity,
   Position,
-  CurrentVelocity
+  CurrentVelocity,
+  DutyCycle
 };
 
 /// @brief モード名を ControlMode に変換する
 /// @throws std::invalid_argument 未対応のモード名
 ControlMode parse_control_mode(std::string_view mode_name);
-/// @brief モードに対応する current / velocity / position を返す
+/// @brief モードに対応する current / velocity / position / duty_cycle を返す
 std::string_view command_interface(ControlMode mode);
 /// @brief モードを選択し，command interface との整合性を確認する
 /// @note モード名が空なら interface 名から選択する
@@ -54,6 +55,7 @@ struct MotorConfig
   double zero_offset_rad{0.0};  // motor PID angle at joint position zero
   double max_vel_rad_s{20.0};   // joint rad/s
   double max_current_a{10.0};   // motor A, signed in the joint direction
+  double max_duty{1.0};         // absolute duty ratio, in (0, 1]
   double min_pos_rad{-kPi};
   double max_pos_rad{kPi};
   double vel_slew_rad_s2{100.0};  // joint rad/s^2
@@ -111,8 +113,8 @@ double pos_to_deg(const MotorConfig &cfg, double pos_rad);
 /// @brief モータ PID 角度 [deg] を単回転の関節位置 [rad] に変換
 double deg_to_pos(const MotorConfig &cfg, double pid_pos_deg);
 
-/// @brief direction（±1）で電流 [A] のモータ方向と関節方向を相互変換
-double apply_direction(const MotorConfig &cfg, double current_a);
+/// @brief direction（±1）で電流 [A] や duty 比のモータ方向と関節方向を相互変換
+double apply_direction(const MotorConfig &cfg, double value);
 
 /// @brief モータ設定の範囲・時間・名前と ID の重複を検査
 /// @throws std::invalid_argument 空の一覧または不正な設定
@@ -129,7 +131,7 @@ bool command_is_valid(const MotorConfig &cfg, double value);
 /// @brief 既知の本体故障・必要な STATUS の鮮度・位置範囲から準備状態を判定
 bool state_ready(const MotorConfig &cfg, const MotorState &state, TimePoint now);
 
-/// @brief 状態更新と 4 モードの制御判断
+/// @brief 状態更新と 5 モードの制御判断
 /// @note 呼び出し側でアクセスを直列化，受信は無効・異常停止中も継続
 class DriverCore
 {
@@ -196,7 +198,7 @@ public:
 
   /// @brief モードの単位で指令値と受信時刻を更新
   /// @param idx 登録順のモータ添字
-  /// @param value 電流 [A]，関節速度 [rad/s] または関節位置 [rad]
+  /// @param value 電流 [A]，関節速度 [rad/s]，関節位置 [rad] または duty 比
   /// @param now 指令を受信した単調時刻
   /// @return 受理時は true，不正値では全台を異常停止
   bool set_command(std::size_t idx, double value, TimePoint now);
@@ -212,7 +214,7 @@ public:
 private:
   struct Command
   {
-    double target{};  // A signed in joint direction, joint rad/s or joint rad by mode
+    double target{};  // joint-direction A/duty ratio, joint rad/s or joint rad by mode
     double ramp_vel{};
     std::optional<TimePoint> received_at;
     TimePoint ramp_at{};
@@ -223,7 +225,7 @@ private:
   /// @brief 全台のフィードバックと指令期限を検査し，異常時は停止
   bool check_commands(TimePoint now);
 
-  /// @brief 4 モードの指令生成と電流起動から速度制御への移行
+  /// @brief 5 モードの指令生成と電流起動から速度制御への移行
   /// @return 生成フレーム，異常時は nullopt
   std::optional<can_msgs::msg::Frame> make_frame(std::size_t idx, TimePoint now);
   std::vector<MotorConfig> configs_;

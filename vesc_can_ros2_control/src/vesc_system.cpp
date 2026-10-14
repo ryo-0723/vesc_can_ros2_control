@@ -110,6 +110,7 @@ vesc_can_driver::MotorConfig VescSystem::load_joint_config(
   cfg.zero_offset_rad = get_numeric_parameter(params, "zero_offset_rad", 0.0);
   cfg.max_vel_rad_s = get_numeric_parameter(params, "max_velocity", 20.0);
   cfg.max_current_a = get_numeric_parameter(params, "max_current_a", 10.0);
+  cfg.max_duty = get_numeric_parameter(params, "max_duty", 1.0);
   cfg.vel_slew_rad_s2 = get_numeric_parameter(params, "velocity_slew_rate", 100.0);
   cfg.startup_current_a = get_numeric_parameter(params, "startup_current_a", 0.0);
   cfg.rpm_threshold = get_numeric_parameter(params, "rpm_control_threshold_rpm", 1000.0);
@@ -317,7 +318,8 @@ double VescSystem::read_state_value(
     case StateField::InputVoltage:
       return status_5_fresh ? state.input_voltage_v : vesc_can_driver::kUnknownValue;
     case StateField::DutyCycle:
-      return status_1_fresh ? state.duty_cycle : vesc_can_driver::kUnknownValue;
+      return status_1_fresh ? vesc_can_driver::apply_direction(cfg, state.duty_cycle)
+                            : vesc_can_driver::kUnknownValue;
   }
   return vesc_can_driver::kUnknownValue;
 }

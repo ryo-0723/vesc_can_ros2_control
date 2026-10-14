@@ -1,10 +1,11 @@
 <?xml version="1.0"?>
-<robot name="vesc_four_modes">
+<robot name="vesc_five_modes">
   <link name="base_link"/>
   <link name="drive_link"/>
   <link name="steer_link"/>
   <link name="current_link"/>
   <link name="hybrid_link"/>
+  <link name="duty_link"/>
   <joint name="drive_joint" type="continuous">
     <parent link="base_link"/><child link="drive_link"/><axis xyz="0 1 0"/>
   </joint>
@@ -18,7 +19,10 @@
   <joint name="hybrid_joint" type="continuous">
     <parent link="base_link"/><child link="hybrid_link"/><axis xyz="0 1 0"/>
   </joint>
-  <ros2_control name="VescFourModes" type="system">
+  <joint name="duty_joint" type="continuous">
+    <parent link="base_link"/><child link="duty_link"/><axis xyz="0 1 0"/>
+  </joint>
+  <ros2_control name="VescFiveModes" type="system">
     <hardware>
       <plugin>vesc_can_ros2_control/VescSystem</plugin>
       <param name="can_tx_topic">/bench/can/tx</param>
@@ -65,6 +69,15 @@
       <command_interface name="velocity"/>
       <state_interface name="position"/><state_interface name="velocity"/>
       <state_interface name="current"/>
+    </joint>
+    <joint name="duty_joint">
+      <param name="controller_id">41</param><param name="pole_pairs">7</param>
+      <param name="control_mode">duty_cycle</param><param name="direction">-1</param>
+      <param name="max_duty">0.5</param>
+      <param name="feedback_timeout_ms">300</param><param name="command_timeout_ms">300</param>
+      <command_interface name="duty_cycle"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+      <state_interface name="duty_cycle"/>
     </joint>
   </ros2_control>
 </robot>

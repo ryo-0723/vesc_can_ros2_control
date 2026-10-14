@@ -9,7 +9,7 @@
 | vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の driver / state を使用 |
 
 `vesc_can_driver::protocol` は encode/decode だけの公開 CMake target です。
-`vesc_can_driver::driver` はモータ設定・単位変換・状態更新・4 モードの指令処理と
+`vesc_can_driver::driver` はモータ設定・単位変換・状態更新・5 モードの指令処理と
 CAN トピック通信をまとめます。`vesc_can_driver::state` は VescState の変換と配信です。
 通常ノードと hardware plugin は同じ driver / state をリンクします。
 protocol は rclcpp を使わず、driver / state は ROS 通信に rclcpp を使います。
@@ -116,7 +116,7 @@ executor の境界で処理し、デストラクタから例外を出しませ�
 これは DLC・bit stuffing・他ノード・再送などで変わる概算で、測定値ではありません。
 必要な STATUS と周期を選び、バス負荷を測定してください。
 
-検証は模擬 2 台と 4 モード混在の模擬 4 台での機能確認です。8 台以上での負荷試験、Zenoh pico を含む
+検証は模擬 2 台と 5 モード混在の模擬 5 台での機能確認です。8 台以上での負荷試験、Zenoh pico を含む
 途絶・遅延試験、実 VESC での角度・電流・停止の確認は今後の実機導入作業です。
 
 ## 外部パッケージとの関係

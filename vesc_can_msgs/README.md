@@ -15,7 +15,9 @@ VESC CAN ドライバの独自 msg と srv をまとめたインターフェー�
 ## 指令と再起動
 
 motor_id は通常ノードの YAML の logical_id に対応します
-モードは起動時に固定し、value の単位は電流 [A]、関節速度 [rad/s]、関節位置 [rad] のいずれかです
+モードは起動時に固定し、value の単位は電流 [A]、関節速度 [rad/s]、関節位置 [rad]、duty 比のいずれかです
+モード名は current / velocity / position / duty_cycle / current_velocity です
+duty_cycle は関節方向の比率 [-1, 1] で、0.5 は 50% を表します
 current_velocity の value も関節速度 [rad/s] です
 配列の stamp は送信側での生成時刻で、タイムアウトは受信側の単調時刻で判定します
 stamp が 0 の指令も受け付けます
