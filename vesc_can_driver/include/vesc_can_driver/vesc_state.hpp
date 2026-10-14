@@ -27,10 +27,10 @@ class MotorStatePublisher
 public:
   /// @brief 各モータの状態トピック用 publisher を作成
   MotorStatePublisher(rclcpp::Node &node, const std::vector<MotorConfig> &configs);
-  /// @brief 全モータの VescStateStamped を同じ ROS 時刻で配信する。
-  /// @param states 設定と同じ順序の状態配列。
-  /// @param now 鮮度判定に使う単調時刻。
-  /// @param stamp メッセージに付ける ROS 時刻。
+  /// @brief 全モータの VescStateStamped を同じ ROS 時刻で配信
+  /// @param states 設定と同じ順序の状態配列
+  /// @param now 鮮度判定に使う単調時刻
+  /// @param stamp メッセージに付ける ROS 時刻
   void publish(const std::vector<MotorState> &states, TimePoint now, const rclcpp::Time &stamp);
 
 private:
