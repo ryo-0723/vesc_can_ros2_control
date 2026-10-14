@@ -81,6 +81,11 @@ ros2 topic pub -r 20 /steer_controller/commands std_msgs/msg/Float64MultiArray '
 
 ## 通信と停止
 
+hardware component 使用時は controller_manager が `VescSystem` を読み込みます
+`vesc_control.launch.py` は通常ノード `vesc_node` を起動しません
+VESC の状態は共通 driver が保持し、hardware の read() が state interface へ反映します
+`/joint_states` は joint_state_broadcaster が配信します
+
 plugin は `vesc_can_driver::CanTransport` を利用します。送受信トピック、QoS、必要な STATUS、
 停止フレームと Zenoh pico の条件は [CAN 接続条件](../vesc_can_driver/README.md#can-と-zenoh-pico-の接続条件)
 を参照してください。[構成とスレッド](../docs/architecture.md) に read/write と
@@ -106,5 +111,6 @@ namespace を付けた場合はこの先頭に追加されます。電流・温�
 
 このパッケージでは hardware 設定の検査と、実際の controller_manager からの
 plugin 読み込み、駆動・操舵、フィードバック途絶時の全台停止を確認します。
-統合テストは `vesc_can_driver` の通常ノード・模擬 VESC も起動し、標準指令と vesc_msgs の
-テレメトリを確認します。
+統合テストでは、別の CAN トピックを使う通常ノード・模擬 VESC も起動し、
+通常ノードの MotorCommands 指令と vesc_msgs の状態出力を確認します
+通常ノードを hardware component の通信経路として使う構成ではありません

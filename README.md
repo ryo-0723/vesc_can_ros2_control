@@ -10,9 +10,9 @@ have different hardware APIs and have not been validated. The C++ library explic
 requires C++20, matching the Lyrical dependencies. This is a development
 package; no ROS apt release or physical-hardware validation is claimed.
 
-Local validation (2026-10-14): Lyrical build and all 40 test cases passed with
+Local validation (2026-10-14): Lyrical build and all 42 test cases passed with
 `rmw_fastrtps_cpp`, including standalone and ros2_control integration tests.
-Installed codec usage and a `BUILD_TESTING=OFF` build also passed.
+Installed C++ library and command message usage also passed.
 See the [validation report](docs/validation.md). The physical CAN bus
 and Zenoh pico gateway have not been exercised.
 
@@ -21,8 +21,10 @@ Motor modes: `current` (motor A signed in the joint direction), `velocity` (join
 Both standalone and ros2_control use the same driver functions for all four modes.
 
 Default rates: CAN commands are sent at 100 Hz per motor; ros2_control state interfaces
-update at 100 Hz. JointState and per-motor VescStateStamped topics publish at 50 Hz
-in both frontends. See the [rate settings](vesc_can_ros2_control/README.md#更新と状態配信の周期).
+update at 100 Hz. Per-motor VescStateStamped topics publish at 50 Hz in both frontends.
+JointState publishes at 50 Hz through ros2_control's joint_state_broadcaster.
+The standalone node publishes VescStateStamped and diagnostics.
+See the [rate settings](vesc_can_ros2_control/README.md#更新と状態配信の周期).
 
 - [CAN protocol, standalone node and bridge configuration (日本語)](vesc_can_driver/README.md)
 - [ros2_control plugin and controller examples (日本語)](vesc_can_ros2_control/README.md)
@@ -30,8 +32,9 @@ in both frontends. See the [rate settings](vesc_can_ros2_control/README.md#更�
 - [Source layout and file responsibilities (日本語)](docs/source-layout.md)
 - [Motor control modes, units and stop behavior (日本語)](docs/motor-modes.md)
 - [Release preparation](docs/releasing.md)
-- State telemetry uses the bundled upstream `vesc_msgs/msg/VescStateStamped`; joint commands
-  and state use standard ROS messages. The CAN boundary uses `can_msgs/msg/Frame`.
+- State telemetry uses the bundled upstream `vesc_msgs/msg/VescStateStamped`.
+  Standalone commands use `vesc_can_driver/msg/MotorCommands` with motor names and values.
+  ros2_control joint state uses standard ROS messages. The CAN boundary uses `can_msgs/msg/Frame`.
 - [Message mapping and migration (日本語)](docs/messages.md)
 
 ## Build and test
@@ -53,7 +56,7 @@ The repository contains three ROS packages:
 
 | Package | Purpose |
 |---|---|
-| `vesc_can_driver` | Native CAN encode/decode, common driver and transport, standalone node and fake VESC |
+| `vesc_can_driver` | Native CAN encode/decode, common driver and transport, standalone node and MotorCommands interface, fake VESC |
 | `vesc_can_ros2_control` | Multi-joint hardware plugin, control launch and URDF/controller examples; depends on `vesc_can_driver` |
 | `vesc_msgs` | State-only subset: two message definitions copied from a pinned f1tenth ROS 2 revision |
 

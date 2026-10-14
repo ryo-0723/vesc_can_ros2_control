@@ -95,30 +95,30 @@ bool decode_status_1(const can_msgs::msg::Frame &frame, Status1 &status);
 /// @brief STATUS2 の積算電荷量を読み取る
 /// @param frame 受信 CAN フレーム
 /// @param[out] status 正常時に更新するデコード結果
-/// @return 正しい形式なら true。不正フレームでは出力を変更しない
+/// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_2(const can_msgs::msg::Frame &frame, Status2 &status);
 
 /// @brief STATUS3 の積算電力量を読み取る
 /// @param frame 受信 CAN フレーム
 /// @param[out] status 正常時に更新するデコード結果
-/// @return 正しい形式なら true。不正フレームでは出力を変更しない
+/// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_3(const can_msgs::msg::Frame &frame, Status3 &status);
 
 /// @brief STATUS4 の温度・入力電流・PID 角度を読み取る
 /// @param frame 受信 CAN フレーム
 /// @param[out] status 正常時に更新するデコード結果
-/// @return 正しい形式なら true。不正フレームでは出力を変更しない
+/// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_4(const can_msgs::msg::Frame &frame, Status4 &status);
 
 /// @brief STATUS5 のタコメータ・入力電圧を読み取る
 /// @param frame 受信 CAN フレーム
 /// @param[out] status 正常時に更新するデコード結果
-/// @return 正しい形式なら true。不正フレームでは出力を変更しない
+/// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status);
 
 /// @brief STATUS6 の ADC 電圧・PPM 入力を読み取る
 /// @param frame 受信 CAN フレーム
 /// @param[out] status 正常時に更新するデコード結果
-/// @return 正しい形式なら true。不正フレームでは出力を変更しない
+/// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status);
 }  // namespace vesc_can_driver::protocol

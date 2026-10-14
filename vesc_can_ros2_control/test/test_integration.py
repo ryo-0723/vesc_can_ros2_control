@@ -16,8 +16,9 @@ import launch_testing
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64, Float64MultiArray
+from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool
+from vesc_can_driver.msg import MotorCommands
 from vesc_msgs.msg import VescStateStamped
 
 
@@ -277,10 +278,9 @@ class IntegrationTest(unittest.TestCase):
             )
         )
 
-    def test_02_standalone_vesc_messages_and_standard_commands(self):
+    def test_02_standalone_vesc_messages_and_named_commands(self):
         prefix = "/topic_test/vesc_can_ros2_control"
         self.node.create_subscription(Frame, "/topic_test/can/tx", self.observe_frame, 100)
-        self.node.create_subscription(JointState, prefix + "/joint_states", self.observe_joints, 10)
 
         def observe_diagnostics(msg):
             self.diagnostics = {
@@ -296,30 +296,24 @@ class IntegrationTest(unittest.TestCase):
                 10,
             )
         self.node.create_subscription(DiagnosticArray, "/diagnostics", observe_diagnostics, 10)
-        vel_pub = self.node.create_publisher(Float64, prefix + "/motors/drive_joint/command", 1)
-        pos_pub = self.node.create_publisher(Float64, prefix + "/motors/steer_joint/command", 1)
-        joint_cmd_pub = self.node.create_publisher(JointState, prefix + "/joint_commands", 1)
+        cmd_pub = self.node.create_publisher(MotorCommands, prefix + "/commands", 10)
         enable_srv = prefix + "/enable"
         response = self.request(SetBool, enable_srv, SetBool.Request(data=True))
         self.assertTrue(response.success, response.message)
 
         def publish_motor_commands():
-            vel_pub.publish(Float64(data=2.0))
-            pos_pub.publish(Float64(data=0.25))
+            cmd_pub.publish(MotorCommands(names=["steer_joint", "drive_joint"], values=[0.25, 2.0]))
 
         def motor_commands_applied():
             return (
-                self.joints is not None
-                and len(self.joints.velocity) == 2
-                and abs(self.joints.velocity[0] - 2.0) < 0.1
-                and abs(self.joints.position[1] - 0.25) < 0.01
-                and set(self.vesc_states) == {11, 21}
+                set(self.vesc_states) == {11, 21}
                 and abs(self.vesc_states[11].speed - 134.0) < 1.0
                 and abs(self.vesc_states[21].pid_pos_now - math.degrees(0.25)) < 0.04
                 and self.diagnostics.get("vesc_can_id_11", {}).get("status_6_fresh") == "true"
             )
 
         self.assertTrue(self.wait_for(motor_commands_applied, action=publish_motor_commands))
+        self.assertEqual(self.node.count_publishers(prefix + "/joint_states"), 0)
         drive_state = self.vesc_states[11]
         self.assertEqual(drive_state.voltage_input, 24.0)
         self.assertEqual(drive_state.charge_drawn, 1.25)
@@ -333,34 +327,28 @@ class IntegrationTest(unittest.TestCase):
         for id in (11, 21):
             self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
             self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
-        self.assert_rate(self.joint_times, 50, "JointState")
 
-        def publish_joint_commands():
-            joint_cmd_pub.publish(
-                JointState(
-                    name=["drive_joint", "steer_joint"], position=[0.0, 0.1], velocity=[1.0, 0.0]
-                )
-            )
+        def publish_changed_commands():
+            cmd_pub.publish(MotorCommands(names=["drive_joint", "steer_joint"], values=[1.0, 0.1]))
 
         self.assertTrue(
             self.wait_for(
-                lambda: self.joints is not None
-                and abs(self.joints.velocity[0] - 1.0) < 0.1
-                and abs(self.joints.position[1] - 0.1) < 0.01,
-                action=publish_joint_commands,
+                lambda: abs(self.vesc_states[11].speed - 67.0) < 1.0
+                and abs(self.vesc_states[21].pid_pos_now - math.degrees(0.1)) < 0.04,
+                action=publish_changed_commands,
             )
         )
         self.assertTrue(
             self.wait_for(lambda: self.frames == {11: (1, 0), 21: (1, 0)}), "Topic timeout stop"
         )
         # New commands cannot silently restart a latched fault.
-        self.wait_for(lambda: False, timeout=0.15, action=publish_joint_commands)
+        self.wait_for(lambda: False, timeout=0.15, action=publish_changed_commands)
         self.assertEqual(self.frames, {11: (1, 0), 21: (1, 0)})
         response = self.request(SetBool, enable_srv, SetBool.Request(data=True))
         self.assertTrue(response.success)
         self.assertTrue(
             self.wait_for(
-                lambda: self.frames.get(11, (0, 0))[0] == 3, action=publish_joint_commands
+                lambda: self.frames.get(11, (0, 0))[0] == 3, action=publish_changed_commands
             )
         )
         self.assertTrue(self.request(SetBool, enable_srv, SetBool.Request(data=False)).success)
@@ -390,24 +378,18 @@ class IntegrationTest(unittest.TestCase):
     def test_03_standalone_four_modes_and_invalid_current(self):
         prefix = "/four_topic/vesc_can_ros2_control"
         self.node.create_subscription(Frame, "/four_topic/can/tx", self.observe_frame, 100)
-        pubs = {
-            name: self.node.create_publisher(Float64, prefix + "/motors/" + name + "/command", 1)
-            for name in ("drive_joint", "steer_joint", "current_joint", "hybrid_joint")
-        }
-        self.assertTrue(
-            self.wait_for(lambda: all(pub.get_subscription_count() for pub in pubs.values()))
-        )
+        cmd_pub = self.node.create_publisher(MotorCommands, prefix + "/commands", 10)
+        self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
         enable_srv = prefix + "/enable"
         self.assertTrue(self.request(SetBool, enable_srv, SetBool.Request(data=True)).success)
 
         def publish_commands():
-            for name, value in {
-                "drive_joint": 2.0,
-                "steer_joint": 0.25,
-                "current_joint": 1.5,
-                "hybrid_joint": 2.0,
-            }.items():
-                pubs[name].publish(Float64(data=value))
+            cmd_pub.publish(
+                MotorCommands(
+                    names=["current_joint", "hybrid_joint", "steer_joint", "drive_joint"],
+                    values=[1.5, 2.0, 0.25, 2.0],
+                )
+            )
 
         expected = {
             11: (3, 134),
@@ -418,27 +400,27 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: self.frames == expected, action=publish_commands))
         self.assertIn((31, 1, 2000), self.frame_history)
 
-        joint_cmd_pub = self.node.create_publisher(JointState, prefix + "/joint_commands", 1)
-
-        def publish_joint_commands():
-            pubs["current_joint"].publish(Float64(data=1.5))
-            joint_cmd_pub.publish(
-                JointState(
-                    name=["drive_joint", "steer_joint", "hybrid_joint"],
-                    position=[0.0, 0.1, 0.0],
-                    velocity=[1.0, 0.0, 1.0],
+        def publish_changed_commands():
+            cmd_pub.publish(
+                MotorCommands(
+                    names=["drive_joint", "steer_joint", "current_joint", "hybrid_joint"],
+                    values=[1.0, 0.1, 1.5, 1.0],
                 )
             )
 
         mixed = {11: (3, 67), 21: (4, round(math.degrees(0.1) * 1e6)), 12: (1, -1500), 31: (3, 67)}
-        self.assertTrue(self.wait_for(lambda: self.frames == mixed, action=publish_joint_commands))
+        self.assertTrue(
+            self.wait_for(lambda: self.frames == mixed, action=publish_changed_commands)
+        )
         stopped = {id: (1, 0) for id in (11, 21, 12, 31)}
 
         def publish_invalid_current():
-            pubs["current_joint"].publish(Float64(data=math.nan))
-            pubs["drive_joint"].publish(Float64(data=1.0))
-            pubs["steer_joint"].publish(Float64(data=0.1))
-            pubs["hybrid_joint"].publish(Float64(data=1.0))
+            cmd_pub.publish(
+                MotorCommands(
+                    names=["drive_joint", "steer_joint", "current_joint", "hybrid_joint"],
+                    values=[1.0, 0.1, math.nan, 1.0],
+                )
+            )
 
         self.assertTrue(
             self.wait_for(lambda: self.frames == stopped, action=publish_invalid_current)
@@ -449,6 +431,85 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: self.frames == expected, action=publish_commands))
         self.assertTrue(self.request(SetBool, enable_srv, SetBool.Request(data=False)).success)
         self.assertTrue(self.wait_for(lambda: self.frames == stopped))
+
+    def test_04_standalone_command_names_and_lengths(self):
+        prefix = "/four_topic/vesc_can_ros2_control"
+        self.node.create_subscription(Frame, "/four_topic/can/tx", self.observe_frame, 100)
+        cmd_pub = self.node.create_publisher(MotorCommands, prefix + "/commands", 10)
+        self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
+        enable_srv = prefix + "/enable"
+        names = ["drive_joint", "steer_joint", "current_joint", "hybrid_joint"]
+
+        def publish_commands():
+            cmd_pub.publish(MotorCommands(names=names, values=[1.0, 0.1, 1.5, 1.0]))
+
+        stopped = {id: (1, 0) for id in (11, 21, 12, 31)}
+        for invalid in (
+            MotorCommands(names=["drive_joint", "steer_joint"], values=[1.0]),
+            MotorCommands(names=["drive_joint", "unknown_motor"], values=[1.0, 0.0]),
+            MotorCommands(names=["drive_joint", "drive_joint"], values=[1.0, 2.0]),
+        ):
+            with self.subTest(names=invalid.names, values=invalid.values):
+                self.assertTrue(
+                    self.request(SetBool, enable_srv, SetBool.Request(data=True)).success
+                )
+                self.assertTrue(
+                    self.wait_for(
+                        lambda: self.frames.get(11) == (3, 67)
+                        and self.frames.get(12) == (1, -1500)
+                        and self.frames.get(31) == (3, 67),
+                        action=publish_commands,
+                    )
+                )
+                self.assertTrue(
+                    self.wait_for(
+                        lambda: self.frames == stopped, action=lambda: cmd_pub.publish(invalid)
+                    )
+                )
+                self.wait_for(lambda: False, timeout=0.15, action=publish_commands)
+                self.assertEqual(self.frames, stopped)
+        self.assertTrue(self.request(SetBool, enable_srv, SetBool.Request(data=False)).success)
+
+    def test_05_standalone_partial_commands_keep_other_motor_timeouts(self):
+        prefix = "/four_topic/vesc_can_ros2_control"
+        self.node.create_subscription(Frame, "/four_topic/can/tx", self.observe_frame, 100)
+        cmd_pub = self.node.create_publisher(MotorCommands, prefix + "/commands", 10)
+        self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
+        enable_srv = prefix + "/enable"
+        self.assertTrue(self.request(SetBool, enable_srv, SetBool.Request(data=True)).success)
+
+        def publish_commands():
+            cmd_pub.publish(
+                MotorCommands(
+                    names=["drive_joint", "steer_joint", "current_joint", "hybrid_joint"],
+                    values=[1.0, 0.1, 1.5, 1.0],
+                )
+            )
+
+        self.assertTrue(
+            self.wait_for(
+                lambda: self.frames.get(11) == (3, 67)
+                and self.frames.get(12) == (1, -1500)
+                and self.frames.get(31) == (3, 67),
+                action=publish_commands,
+            )
+        )
+
+        def publish_partial_commands():
+            cmd_pub.publish(MotorCommands(names=["current_joint"], values=[0.5]))
+            cmd_pub.publish(MotorCommands(names=["hybrid_joint", "drive_joint"], values=[1.0, 1.0]))
+
+        self.assertTrue(
+            self.wait_for(lambda: self.frames.get(12) == (1, -500), action=publish_partial_commands)
+        )
+        stopped = {id: (1, 0) for id in (11, 21, 12, 31)}
+        self.assertTrue(
+            self.wait_for(
+                lambda: self.frames == stopped, timeout=1.0, action=publish_partial_commands
+            ),
+            "Commands for other motors must not refresh steer_joint's command timeout",
+        )
+        self.assertTrue(self.request(SetBool, enable_srv, SetBool.Request(data=False)).success)
 
 
 @launch_testing.post_shutdown_test()

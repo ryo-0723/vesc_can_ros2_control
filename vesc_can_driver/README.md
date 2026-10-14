@@ -49,12 +49,21 @@ if (vesc_can_driver::protocol::decode_status_1(received_frame, status)) {
 
 ## 通常ノード
 
+通常ノードは ros2_control を使わずにモータを動かす入口です
+hardware component を使う場合は `vesc_control.launch.py` から controller_manager を起動し、
+`vesc_node` は起動しません
+
+`motors` に登録した複数モータを、1 つの `vesc_node` で管理します
+上位ノードは `drive_joint` などのモータ名で指令・状態を扱い、CAN ID を持つ必要はありません
+モータ名と VESC の機器 ID の対応は YAML の `controller_id` に設定します
+ros2_control と同じ関節名を使うと、上位側の名前を揃えられます
+
 ```bash
 ros2 launch vesc_can_driver vesc_standalone.launch.py use_mock:=true
 # 別端末：フィードバックを受信した後に有効化
 ros2 service call /vesc_can_ros2_control/enable std_srvs/srv/SetBool '{data: true}'
-ros2 topic pub -r 20 /vesc_can_ros2_control/joint_commands sensor_msgs/msg/JointState \
-  '{name: [drive_joint, steer_joint], position: [0.0, 0.25], velocity: [1.0, 0.0]}'
+ros2 topic pub -r 20 /vesc_can_ros2_control/commands vesc_can_driver/msg/MotorCommands \
+  '{names: [drive_joint, steer_joint], values: [1.0, 0.25]}'
 ```
 
 通常ノードの例では /can/tx と /can/rx を使います。物理ブリッジが起動している場合は
@@ -67,25 +76,35 @@ ros2 topic pub -r 20 /vesc_can_ros2_control/joint_commands sensor_msgs/msg/Joint
 
 | トピック / サービス | 型 | 単位など |
 |---|---|---|
-| ~/joint_commands | sensor_msgs/msg/JointState | name 指定、velocity [関節 rad/s]、position [関節 rad]。選択したモードの配列を使用 |
-| ~/joint_states | sensor_msgs/msg/JointState | 関節 rad / rad/s、effort は空 |
+| ~/commands | vesc_can_driver/msg/MotorCommands | names でモータを指定、values に設定したモードの指令値 |
 | ~/enable | std_srvs/srv/SetBool | true: 有効化と異常解除、false: 無効化 |
 | /diagnostics | diagnostic_msgs/msg/DiagnosticArray | 接続・有効状態・ドライバ異常 |
-| ~/motors/<motor_name>/command | std_msgs/msg/Float64 | 電流はモータ A（関節方向の符号）、速度・電流＋速度は関節 rad/s、位置は関節 rad |
 | ~/motors/<motor_name>/state | vesc_msgs/msg/VescStateStamped | 上流定義のモータ生値。speed は ERPM、pid_pos_now はモータ PID 角度 [deg] |
 
-電流以外の指令は関節単位です。`Float64` と `JointState` は同じ変換・範囲検査・期限切れ停止を
-使用します。NaN/Inf や範囲外の指令は異常停止になります。
-`VescStateStamped` は関節単位へ変換する前の VESC 値を配信します。
-複数台ではトピック名の motor_name と `state.controller_id` で識別できます。
+`MotorCommands.names` と `values` は同じ長さとし、対応する要素を同じ位置へ入れます
+配列の順序は `motors` の登録順と違っても使えます
+電流モードはモータ A（関節方向の符号）、速度・電流＋速度は関節 rad/s、位置は関節 rad です
+制御モードは設定で固定し、指令メッセージから切り替えません
+1 台だけでも複数台でも同じ `~/commands` を使い、未指定モータの指令や受信時刻は更新しません
+空の配列は指令を更新しません
+配列長の不一致、未登録名、名前の重複、NaN/Inf、範囲外の指令は全台停止になります
+
+`VescStateStamped` は関節単位へ変換する前の VESC 値を配信します
+状態の購読先は `~/motors/<motor_name>/state` で選びます
+`state.controller_id` は実機の識別・診断用として残しますが、上位ノードの振り分けには不要です
+
+通常ノードの状態出力は VescStateStamped と診断です
+関節状態は ros2_control の state interface から取得し、トピックが必要なら
+joint_state_broadcaster が `/joint_states` を配信します
 
 ```bash
-ros2 topic pub -r 20 /vesc_can_ros2_control/motors/drive_joint/command \
-  std_msgs/msg/Float64 '{data: 1.0}'
+ros2 topic pub -r 20 /vesc_can_ros2_control/commands vesc_can_driver/msg/MotorCommands \
+  '{names: [drive_joint], values: [1.0]}'
 ros2 topic echo /vesc_can_ros2_control/motors/drive_joint/state
 ```
 
-旧独自メッセージ、SetPosition.srv、logical_id 設定は廃止しました。
+旧 ActuatorTarget / ActuatorState、SetPosition.srv、logical_id 設定は廃止しました
+通常ノードの旧 Float64 / JointState 指令は `~/commands` の MotorCommands に統一しました
 状態値の取得範囲、未取得値、旧 API の移行は [メッセージ対応表](../docs/messages.md) を参照してください。
 通常ノードの CAN 指令は `update_period_ms` (既定 10 ms、各モータ 100 Hz)、
 状態・診断は `state_publish_period_ms` (既定 20 ms、50 Hz) で周期的に配信します。
@@ -97,7 +116,7 @@ pole_pairs の既定は 7。startup_current_a の既定は **0** に変更して
 直接 RPM 制御します。電流始動は `control_mode: current_velocity` で選択し、
 startup_timeout_ms (既定 1000) で打ち切ります。hardware plugin も同じ 4 モードを使います。
 電流モードは `control_mode: current`、指令上限は max_current_a (既定 10 A) です。
-JointState の effort は電流入力として使いません。
+電流を含む全 4 モードを MotorCommands で受け付けます
 CAN トピックのパラメータ未指定時の既定値は従来の /socketcan_bridge/tx と /rx です。
 
 ## CAN と Zenoh pico の接続条件

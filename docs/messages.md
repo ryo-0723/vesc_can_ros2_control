@@ -15,15 +15,37 @@ ROS パッケージで、VESC firmware の CAN パケットそのものとは別
 | 用途 | 型 | 単位・識別 |
 |---|---|---|
 | CAN 境界 | can_msgs/msg/Frame | 元の CAN ID、フラグ、DLC、ペイロードを保持 |
-| VESC 状態 | vesc_msgs/msg/VescStateStamped | モータごとのトピック、state.controller_id で CAN ID を識別 |
-| 関節状態・複数関節指令 | sensor_msgs/msg/JointState | 関節名、関節 rad / rad/s |
-| 単一モータ指令 | std_msgs/msg/Float64 | 電流はモータ A（関節方向の符号）、位置は関節 rad、速度・電流＋速度は関節 rad/s |
+| VESC 状態 | vesc_msgs/msg/VescStateStamped | モータ名ごとのトピックで識別、state.controller_id は VESC の機器 ID |
+| モータ指令（通常ノード） | vesc_can_driver/msg/MotorCommands | モータ名と指令値の配列、設定したモードに応じて A / 関節 rad / rad/s |
+| 関節状態（ros2_control） | sensor_msgs/msg/JointState | joint_state_broadcaster が state interface から配信 |
 | 有効化・無効化 | std_srvs/srv/SetBool | 明示的な有効化と異常解除 |
 | 接続・鮮度・ドライバ異常 | diagnostic_msgs/msg/DiagnosticArray | モータごとの hardware_id と key/value |
 
-上流 `vesc_msgs` は状態用のパッケージです。指令・CAN フレーム・有効化サービスは
-それぞれの標準型を使います。VescImu/VescImuStamped はネイティブ STATUS に
+上流 `vesc_msgs` は状態用のパッケージです
+通常ノードの独自指令は `vesc_can_driver/msg/MotorCommands.msg` に置きます
+CAN フレームと有効化サービスには標準型を使います
+VescImu/VescImuStamped はネイティブ STATUS に
 IMU データがないため、ソースにも生成対象にも含めません。
+
+## 通常ノードのモータ識別と指令
+
+1 つの通常ノードが `motors` に登録した全台を管理します
+ROS 側の識別子はモータ名で、数値の logical_id は追加しません
+モータ名と CAN の機器 ID の対応は YAML の `controller_id` に集約します
+指令は `~/commands`、状態は `~/motors/<motor_name>/state` を使用します
+上位ノードは同じモータ名で送受信でき、CAN ID を知る必要はありません
+
+```text
+string[] names
+float64[] values
+```
+
+names と values の長さを揃え、各指令値の単位はそのモータの設定から決まります
+配列順は自由で、未指定モータの指令と期限は維持します
+配列長の不一致、未登録名、重複名、不正な指令値は全台停止になります
+モードは指令から切り替えません
+JointState は関節状態用で、effort は電流ではなくトルクなので指令に流用しません
+状態メッセージ内の controller_id は元の VESC 機器 ID を保持します
 
 ## コピーと vcs 取得の使い分け
 
@@ -58,7 +80,8 @@ CAN レイアウトは [VESC firmware 6.06 の送信処理](https://github.com/v
 | STATUS6 | 対応するフィールドなし | ADC1〜3 [V] と PPM 値を /diagnostics に配信 |
 
 `speed` は極対数・減速比・方向を適用する前の ERPM です。`pid_pos_now` も生の
-モータ PID 角度です。JointState と ros2_control には変換後の関節単位を渡します。
+モータ PID 角度です。ros2_control の state interface には変換後の関節単位を渡します。
+JointState の関節状態は joint_state_broadcaster がこの interface から作成します
 複数の STATUS をまとめた状態であり、header.stamp は ROS の配信時刻です。
 すべてのフィールドが同時に測定されたことを表す時刻ではありません。
 
@@ -122,15 +145,20 @@ C++ の共通ヘッダは `vesc_can_driver/...`、namespace は `vesc_can_driver
 
 | 旧 API | 移行先 |
 |---|---|
-| ActuatorTarget / ActuatorTargetArray | ~/motors/<motor_name>/command の Float64、または ~/joint_commands の JointState |
-| ActuatorState / ActuatorStateArray | ~/motors/<motor_name>/state の VescStateStamped。関節単位には ~/joint_states を使用 |
+| ActuatorTarget / ActuatorTargetArray | ~/commands の MotorCommands、names にモータ名、values に指令値 |
+| ~/motors/<motor_name>/command の Float64 | ~/commands の MotorCommands、names: [motor_name]、values: [旧 data] |
+| ~/joint_commands の JointState | ~/commands の MotorCommands、モータ名ごとに position / velocity から values へ移す |
+| ActuatorState / ActuatorStateArray | ~/motors/<motor_name>/state の VescStateStamped。関節単位は ros2_control の state interface / joint_state_broadcaster を使用 |
 | logical_id | motors の関節名で指令先を選ぶ。実機の CAN ID は controller_id に指定 |
 | state_array_publish_period_ms | state_publish_period_ms |
 | target_topic / target_array_topic / state_topic / state_array_topic | 新トピックへの ROS remapping |
 
+通常ノードの `~/joint_states` は廃止しました
+通常ノードの状態は VescStateStamped と診断を使用します
+
 旧駆動指令の機械 RPM を新しい関節 rad/s へ移すときは
 `joint_rad_s = motor_rpm × 2π / (60 × gear_ratio)` で変換します。
-Float64 指令は上流 UART ノードの commands/motor/speed (ERPM) とは単位が異なります。
+速度指令は上流 UART ノードの commands/motor/speed (ERPM) とは単位が異なります。
 CAN の配線、中継器の can_msgs 型、ros2_control の関節インターフェースは同じです。
 
 ## Lyrical と apt 公開

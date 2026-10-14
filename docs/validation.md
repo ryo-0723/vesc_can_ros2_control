@@ -320,3 +320,48 @@ driver target だけをリンクして DriverCore を利用する例も成功し
 パッケージ・実行ファイル・launch の解決、全 C++ の clang-format、
 Python の Black、`git diff --check` も成功しています。
 上表は ROS メッセージの受信周期で、実機 CAN バスや Zenoh pico の測定ではありません。
+
+## 通常ノードの状態出力を整理した後の検証
+
+2026-10-14、通常ノードの `~/joint_states` publisher とメッセージ生成を削除しました
+通常ノードは VescStateStamped と診断を配信し、JointState の指令入力は維持しています
+hardware component 使用時は controller_manager が VescSystem を読み込み、
+通常ノード vesc_node は起動しません
+関節状態は state interface から取得し、joint_state_broadcaster が `/joint_states` を配信します
+
+統合テストの通常ノードの判定を VescState と CAN 指令に変更し、
+通常ノードの joint_states publisher が存在しないことも確認しています
+ドライバ単体と hardware plugin のビルド、既存の **40 ケースが成功**しました
+`colcon test-result` は `45 tests, 0 errors, 0 failures, 0 skipped` です
+
+| 模擬構成 | CAN 指令（各モータ） | VescStateStamped（各モータ） | JointState |
+|---|---|---|---|
+| ros2_control、4 モード混在 | 100.0 Hz | 50.0 Hz | 50.0 Hz、joint_state_broadcaster |
+| 通常ノード、駆動・操舵 | 100.0 Hz | 50.0 Hz | 配信なし |
+
+関数コメントの句点を整理し、通常ノード以外の 9 C++ ファイルは
+コメント・整形を除いたコードが編集前と一致することも確認しました
+全 C++ の clang-format、Python の Black、外部 CMake 利用、`git diff --check` は成功しています
+上表は模擬環境での ROS メッセージ受信周期で、実 CAN バス・モータ・Zenoh pico は未検証です
+
+## 通常ノードのモータ名による指令へ統一した後の検証
+
+2026-10-14、通常ノードの指令を `~/commands` の MotorCommands に統一しました
+names にモータ名、values に設定したモードの指令値を入れ、CAN ID との対応は設定に集約します
+上流 VescState / VescStateStamped の内容と SHA-256 は変更していません
+状態はモータ名ごとのトピックで配信し、上位ノードに CAN ID の知識を要求しません
+
+ドライバ単体と hardware plugin を Lyrical でビルドし、**42 ケースが成功**しました
+`colcon test-result` は `47 tests, 0 errors, 0 failures, 0 skipped` です
+既存の統合テストを MotorCommands 入力へ変更し、次を確認しています
+
+- 設定順と異なる名前の配列でも正しい VESC へ送ること
+- 電流・速度・位置・電流＋速度を 1 つの指令メッセージで扱えること
+- 配列長の不一致、未登録名、重複名、NaN 電流で全台停止し、異常を保持すること
+- 一部のモータの指令更新が、未指定モータの指令期限を延長しないこと
+- CAN 指令は各モータ 100 Hz、VescState は両入口で 50 Hz、JointState は ros2_control のみ 50 Hz
+
+外部 CMake 利用者からのライブラリのビルド・実行と、MotorCommands の C++ / Python
+シリアライズ・デシリアライズも成功しました
+全 C++ の clang-format、Python 3 ファイルの Black、`git diff --check` は成功しています
+検証は模擬環境で、実 CAN バス・モータ・Zenoh pico は未検証です

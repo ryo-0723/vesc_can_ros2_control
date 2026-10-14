@@ -7,16 +7,14 @@
 #include <vector>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
-#include "sensor_msgs/msg/joint_state.hpp"
-#include "std_msgs/msg/float64.hpp"
 #include "std_srvs/srv/set_bool.hpp"
+#include "vesc_can_driver/msg/motor_commands.hpp"
 #include "vesc_can_driver/vesc_driver.hpp"
 #include "vesc_can_driver/vesc_state.hpp"
 
 namespace vesc_can_driver
 {
-using Float64 = std_msgs::msg::Float64;
-using JointState = sensor_msgs::msg::JointState;
+using MotorCommands = vesc_can_driver::msg::MotorCommands;
 using DiagnosticStatus = diagnostic_msgs::msg::DiagnosticStatus;
 using DiagnosticArray = diagnostic_msgs::msg::DiagnosticArray;
 using SetBool = std_srvs::srv::SetBool;
@@ -24,7 +22,7 @@ using SetBool = std_srvs::srv::SetBool;
 class VescNode : public rclcpp::Node
 {
 public:
-  /// @brief パラメータを読み込み、通信・指令受付・状態配信を起動する。
+  /// @brief パラメータを読み込み、通信・指令受付・状態配信を起動する
   VescNode() : rclcpp::Node("vesc_can_ros2_control")
   {
     TransportOptions opts;
@@ -53,7 +51,7 @@ public:
   }
 
 private:
-  /// @brief モータ名を接頭辞に持つ ROS パラメータから設定を読み込む。
+  /// @brief モータ名を接頭辞に持つ ROS パラメータから設定を読み込む
   MotorConfig load_motor_config(const std::string &motor_name)
   {
     const auto prefix = motor_name + ".";
@@ -97,7 +95,7 @@ private:
     return cfg;
   }
 
-  /// @brief 同じ namespace / context で通信ノードと専用 executor を起動する。
+  /// @brief 同じ namespace / context で通信ノードと専用 executor を起動する
   void initialize_can_transport(const TransportOptions &opts)
   {
     auto node_opts = rclcpp::NodeOptions().use_global_arguments(false);
@@ -107,64 +105,60 @@ private:
     transport_->start();
   }
 
-  /// @brief モータ別指令・JointState 指令・enable サービスを登録する。
+  /// @brief 全モータ共通の指令トピックと enable サービスを登録する
   void initialize_command_interfaces()
   {
-    cmd_subs_.reserve(configs_.size());
-    for (std::size_t motor_idx = 0; motor_idx < configs_.size(); ++motor_idx) {
-      const auto cmd_topic = "~/motors/" + configs_[motor_idx].name + "/command";
-      cmd_subs_.push_back(
-        create_subscription<Float64>(cmd_topic, 1, [this, motor_idx](Float64::ConstSharedPtr msg) {
-          transport_->set_command(motor_idx, msg->data);
-        }));
-    }
-    joint_cmd_sub_ = create_subscription<JointState>("~/joint_commands", 1,
-      [this](JointState::ConstSharedPtr msg) { handle_joint_commands(*msg); });
+    cmd_sub_ = create_subscription<MotorCommands>(
+      "~/commands", 10, [this](MotorCommands::ConstSharedPtr msg) { handle_commands(*msg); });
     enable_srv_ = create_service<SetBool>("~/enable",
       [this](SetBool::Request::SharedPtr request, SetBool::Response::SharedPtr response) {
         handle_enable_request(*request, *response);
       });
   }
 
-  /// @brief VescState・JointState・診断の publisher と周期タイマーを作る。
+  /// @brief VescState・診断の publisher と周期タイマーを作る
   void initialize_state_publishers(std::chrono::milliseconds period)
   {
     state_pub_ = std::make_unique<MotorStatePublisher>(*this, configs_);
-    joint_state_pub_ = create_publisher<JointState>("~/joint_states", 10);
     diag_pub_ = create_publisher<DiagnosticArray>("/diagnostics", 10);
     state_timer_ = create_wall_timer(period, [this]() { publish_states(); });
   }
 
-  /// @brief 関節名に対応する位置・速度指令を取り出し、最新指令へ渡す。
-  /// @note 電流指令はモータ別 Float64 トピックで受け付ける。
-  void handle_joint_commands(const JointState &msg)
+  /// @brief モータ名と指令値を検査し、設定したモードの最新指令へ渡す
+  /// @note 一部のモータだけ指定でき、未指定モータの指令期限は更新しない
+  void handle_commands(const MotorCommands &msg)
   {
-    const auto joint_count = msg.name.size();
-    if ((!msg.position.empty() && msg.position.size() != joint_count) ||
-        (!msg.velocity.empty() && msg.velocity.size() != joint_count)) {
+    if (msg.names.size() != msg.values.size()) {
       transport_->request_stop();
-      RCLCPP_ERROR(get_logger(), "Joint command arrays must match name length");
+      RCLCPP_ERROR(get_logger(), "Motor command names and values must have equal lengths");
       return;
     }
-    for (std::size_t joint_idx = 0; joint_idx < joint_count; ++joint_idx) {
+    std::vector<std::size_t> motor_indices;
+    motor_indices.reserve(msg.names.size());
+    for (std::size_t cmd_idx = 0; cmd_idx < msg.names.size(); ++cmd_idx) {
       const auto cfg_it = std::find_if(configs_.begin(), configs_.end(),
-        [&](const MotorConfig &cfg) { return cfg.name == msg.name[joint_idx]; });
+        [&](const MotorConfig &cfg) { return cfg.name == msg.names[cmd_idx]; });
       if (cfg_it == configs_.end()) {
-        continue;
+        transport_->request_stop();
+        RCLCPP_ERROR(get_logger(), "Unknown motor name: %s", msg.names[cmd_idx].c_str());
+        return;
       }
-      // JointState.effort is torque [Nm]; current [A] uses the per-motor Float64 topic.
-      if (cfg_it->mode == ControlMode::Current) {
-        continue;
+      const auto motor_idx = static_cast<std::size_t>(cfg_it - configs_.begin());
+      if (std::find(motor_indices.begin(), motor_indices.end(), motor_idx) != motor_indices.end() ||
+          !command_is_valid(*cfg_it, msg.values[cmd_idx])) {
+        transport_->request_stop();
+        RCLCPP_ERROR(
+          get_logger(), "Duplicate motor name or invalid command: %s", cfg_it->name.c_str());
+        return;
       }
-      const auto &values = is_velocity_mode(cfg_it->mode) ? msg.velocity : msg.position;
-      if (!values.empty()) {
-        const auto motor_idx = static_cast<std::size_t>(cfg_it - configs_.begin());
-        transport_->set_command(motor_idx, values[joint_idx]);
-      }
+      motor_indices.push_back(motor_idx);
+    }
+    for (std::size_t cmd_idx = 0; cmd_idx < motor_indices.size(); ++cmd_idx) {
+      transport_->set_command(motor_indices[cmd_idx], msg.values[cmd_idx]);
     }
   }
 
-  /// @brief 有効化・無効化要求を処理し、自動有効化を解除する。
+  /// @brief 有効化・無効化要求を処理し、自動有効化を解除する
   void handle_enable_request(const SetBool::Request &request, SetBool::Response &response)
   {
     auto_enable_once_ = false;
@@ -182,7 +176,7 @@ private:
     }
   }
 
-  /// @brief 診断メッセージへキーと値を追加する。
+  /// @brief 診断メッセージへキーと値を追加する
   static void add_diagnostic_value(
     DiagnosticStatus &msg, const std::string &key, const std::string &value)
   {
@@ -192,7 +186,7 @@ private:
     msg.values.push_back(field);
   }
 
-  /// @brief 準備・動作許可・異常と STATUS の鮮度を診断メッセージにまとめる。
+  /// @brief 準備・動作許可・異常と STATUS の鮮度を診断メッセージにまとめる
   DiagnosticStatus make_diagnostic_status(const MotorConfig &cfg, const MotorState &state,
     TimePoint steady_now, bool ready, bool enabled, bool faulted,
     const std::string &fault_reason) const
@@ -241,8 +235,8 @@ private:
     return msg;
   }
 
-  /// @brief 最新状態を取得し、VescState・JointState・診断を周期配信する。
-  /// @note auto_enable_once が有効なら初回の準備完了時だけ有効化する。
+  /// @brief 最新状態を取得し、VescState・診断を周期配信する
+  /// @note auto_enable_once が有効なら初回の準備完了時だけ有効化する
   void publish_states()
   {
     if (auto_enable_once_ && transport_->enable()) {
@@ -255,42 +249,31 @@ private:
     const bool enabled = transport_->enabled();
     const bool faulted = transport_->faulted();
     const auto fault_reason = faulted ? transport_->fault_reason() : std::string{};
-    JointState joint_msg;
     DiagnosticArray diag_msg;
-    joint_msg.header.stamp = stamp;
     diag_msg.header.stamp = stamp;
     for (std::size_t motor_idx = 0; motor_idx < configs_.size(); ++motor_idx) {
       const auto &cfg = configs_[motor_idx];
       const auto &state = states[motor_idx];
       const bool ready = state_ready(cfg, state, steady_now);
-      const bool pos_fresh = cfg.mode == ControlMode::Position
-                               ? ready
-                               : feedback_fresh(state.status5_at, steady_now, cfg.feedback_timeout);
-      joint_msg.name.push_back(cfg.name);
-      joint_msg.position.push_back(ready && pos_fresh ? state.pos_rad : kUnknownValue);
-      joint_msg.velocity.push_back(ready ? state.vel_rad_s : kUnknownValue);
       diag_msg.status.push_back(
         make_diagnostic_status(cfg, state, steady_now, ready, enabled, faulted, fault_reason));
     }
-    joint_state_pub_->publish(joint_msg);
     diag_pub_->publish(diag_msg);
   }
 
   std::vector<MotorConfig> configs_;
   bool auto_enable_once_{false};
   std::unique_ptr<CanTransport> transport_;
-  std::vector<rclcpp::Subscription<Float64>::SharedPtr> cmd_subs_;
-  rclcpp::Subscription<JointState>::SharedPtr joint_cmd_sub_;
+  rclcpp::Subscription<MotorCommands>::SharedPtr cmd_sub_;
   rclcpp::Service<SetBool>::SharedPtr enable_srv_;
   std::unique_ptr<MotorStatePublisher> state_pub_;
-  rclcpp::Publisher<JointState>::SharedPtr joint_state_pub_;
   rclcpp::Publisher<DiagnosticArray>::SharedPtr diag_pub_;
   rclcpp::TimerBase::SharedPtr state_timer_;
 };
 }  // namespace vesc_can_driver
 
-/// @brief 通常ノードを起動し、終了時に ROS を停止する。
-/// @return 正常終了で 0、ノード実行中の例外で 1。
+/// @brief 通常ノードを起動し、終了時に ROS を停止する
+/// @return 正常終了で 0、ノード実行中の例外で 1
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);

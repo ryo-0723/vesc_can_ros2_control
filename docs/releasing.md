@@ -44,8 +44,9 @@ CAN の encode/decode・通常ノードは `vesc_can_driver`、hardware plugin �
 参考: [rosdistro の公開手順](https://github.com/ros/rosdistro/blob/master/CONTRIBUTING.md)、
 [bloom](https://github.com/ros-infrastructure/bloom)
 
-公開 API は安定化が必要です。独自メッセージは廃止し、通常ノードの状態は
-同梱した上流 `vesc_msgs`、指令は標準 ROS msg を使います。[移行案内](messages.md) に
+公開 API は安定化が必要です
+通常ノードの状態は同梱した上流 `vesc_msgs`、指令は
+`vesc_can_driver/msg/MotorCommands` を使います。[移行案内](messages.md) に
 型・単位・未取得値を記録しています。`vesc_msgs` は f1tenth 管理のコミュニティパッケージです。
 
 abu2027 側へ導入するときは独立リポジトリを vcs の .repos ファイルや submodule などで

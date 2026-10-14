@@ -18,7 +18,7 @@ namespace vesc_can_driver
 {
 namespace
 {
-/// @brief 模擬 STATUS の指定位置へ値を big endian で書き込む。
+/// @brief 模擬 STATUS の指定位置へ値を big endian で書き込む
 void write_big_endian(std::array<std::uint8_t, 8> &payload, std::size_t offset, std::int64_t value,
   std::size_t byte_count)
 {
@@ -29,7 +29,7 @@ void write_big_endian(std::array<std::uint8_t, 8> &payload, std::size_t offset, 
   }
 }
 
-/// @brief 指令の先頭 4 バイトを符号付き int32 として読む。
+/// @brief 指令の先頭 4 バイトを符号付き int32 として読む
 std::int32_t read_command_payload(const std::array<std::uint8_t, 8> &payload)
 {
   std::uint32_t payload_bits = 0;
@@ -44,7 +44,7 @@ std::int32_t read_command_payload(const std::array<std::uint8_t, 8> &payload)
 class FakeVescNode : public rclcpp::Node
 {
 public:
-  /// @brief 模擬モータ・CAN 指令受付・STATUS 配信タイマーを作成する。
+  /// @brief 模擬モータ・CAN 指令受付・STATUS 配信タイマーを作成する
   FakeVescNode() : rclcpp::Node("fake_vesc")
   {
     const auto controller_ids =
@@ -94,7 +94,7 @@ private:
     TimePoint cmd_at{};
   };
 
-  /// @brief 登録 ID の電流・速度・位置指令を模擬状態へ反映する。
+  /// @brief 登録 ID の電流・速度・位置指令を模擬状態へ反映する
   void handle_can_command(const can_msgs::msg::Frame &frame)
   {
     if (!frame.is_extended || frame.is_rtr || frame.is_error || frame.dlc != 4 ||
@@ -131,7 +131,7 @@ private:
     motor_it->cmd_at = SteadyClock::now();
   }
 
-  /// @brief ID・ROS 時刻・DLC=8 を設定した模擬 STATUS フレームを作る。
+  /// @brief ID・ROS 時刻・DLC=8 を設定した模擬 STATUS フレームを作る
   can_msgs::msg::Frame make_status_frame(const FakeMotor &motor, std::uint32_t packet_id)
   {
     can_msgs::msg::Frame frame;
@@ -142,7 +142,7 @@ private:
     return frame;
   }
 
-  /// @brief 1 台の模擬状態と固定の診断値を STATUS1〜6 で配信する。
+  /// @brief 1 台の模擬状態と固定の診断値を STATUS1〜6 で配信する
   void publish_motor_feedback(const FakeMotor &motor)
   {
     auto status_1 = make_status_frame(motor, protocol::kStatus1Id);
@@ -183,7 +183,7 @@ private:
     feedback_pub_->publish(status_6);
   }
 
-  /// @brief 模擬位置を更新し、指令切れの停止とフィードバック配信を行う。
+  /// @brief 模擬位置を更新し、指令切れの停止とフィードバック配信を行う
   void update_motors()
   {
     const auto steady_now = SteadyClock::now();
@@ -212,8 +212,8 @@ private:
 };
 }  // namespace vesc_can_driver
 
-/// @brief 模擬 VESC ノードを起動し、終了時に ROS を停止する。
-/// @return 正常終了で 0、ノード実行中の例外で 1。
+/// @brief 模擬 VESC ノードを起動し、終了時に ROS を停止する
+/// @return 正常終了で 0、ノード実行中の例外で 1
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);

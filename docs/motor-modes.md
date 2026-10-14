@@ -111,10 +111,10 @@ joint_rad = remainder(feedback_deg × π / 180 - zero_offset_rad, 2π)
 
 | control_mode | command_interface | 通常ノードの入力 |
 |---|---|---|
-| current | current | 各モータの Float64 [A] |
-| velocity | velocity | Float64 [rad/s] または JointState.velocity |
-| position | position | Float64 [rad] または JointState.position |
-| current_velocity | velocity | Float64 [rad/s] または JointState.velocity |
+| current | current | MotorCommands.values [A] |
+| velocity | velocity | MotorCommands.values [rad/s] |
+| position | position | MotorCommands.values [rad] |
+| current_velocity | velocity | MotorCommands.values [rad/s] |
 
 ```yaml
 drive_joint:
@@ -148,10 +148,10 @@ hybrid_joint:
 
 上記は `ros__parameters` 内の抜粋です。完全な設定は
 [four_modes.yaml](../vesc_can_driver/config/four_modes.yaml) を参照してください。
-`JointState` 指令は `name` で関節を指定し、速度関節は `velocity` 配列、
-位置関節は `position` 配列を読みます。送る配列の長さは `name` と一致させます。
-電流モードは各モータの `Float64` を使います。`JointState.effort` は [Nm] なので
-電流の入力には使いません。電流関節は `~/joint_commands` では更新されません。
+通常ノードの指令は `MotorCommands.names` でモータ名を指定し、`values` に対応する
+モードの指令値を入れます
+全 4 モードを同じ `~/commands` で受け付け、2 つの配列の長さを一致させます
+上位ノードに CAN ID の対応表を持たせる必要はありません
 
 ros2_control では各 joint に `control_mode` param と上表の command interface を
 1 つ記述し、同名の state interface も登録します。
@@ -184,19 +184,17 @@ ros2 launch vesc_can_driver vesc_standalone.launch.py \
   config:="$(ros2 pkg prefix --share vesc_can_driver)/config/four_modes.yaml"
 ```
 
-通常ノードでは次の指令ストリームを別々の端末で起動し、フィードバックが届いてから
-さらに別の端末で enable を呼びます。無効中の指令は破棄され、有効化後に届く新しい
-指令を使います。これにより 4 台へ command_timeout_ms 内に新しい指令を送れます。
+通常ノードでは次の指令ストリームを起動し、フィードバックが届いてから
+別の端末で enable を呼びます
+無効中の指令は破棄され、有効化後に届く新しい指令を使います
 
 ```bash
-ros2 topic pub -r 20 /vesc_can_ros2_control/motors/current_joint/command \
-  std_msgs/msg/Float64 '{data: 1.5}'
-ros2 topic pub -r 20 /vesc_can_ros2_control/joint_commands sensor_msgs/msg/JointState \
-  '{name: [drive_joint, steer_joint, hybrid_joint], position: [0.0, 0.25, 0.0], velocity: [2.0, 0.0, 2.0]}'
+ros2 topic pub -r 20 /vesc_can_ros2_control/commands vesc_can_driver/msg/MotorCommands \
+  '{names: [drive_joint, steer_joint, current_joint, hybrid_joint], values: [2.0, 0.25, 1.5, 2.0]}'
 ros2 service call /vesc_can_ros2_control/enable std_srvs/srv/SetBool '{data: true}'
 ```
 
-通常ノードでは他の全モータにもそれぞれ新しい指令を周期送信します。
+全モータへ command_timeout_ms 内に新しい指令を送り続けます
 
 ## 電流＋速度モード
 

@@ -31,15 +31,15 @@ enum class ControlMode
   CurrentVelocity
 };
 
-/// @brief モード名を ControlMode に変換する。
-/// @throws std::invalid_argument 未対応のモード名。
+/// @brief モード名を ControlMode に変換する
+/// @throws std::invalid_argument 未対応のモード名
 ControlMode parse_control_mode(std::string_view mode_name);
-/// @brief モードに対応する current / velocity / position を返す。
+/// @brief モードに対応する current / velocity / position を返す
 std::string_view command_interface(ControlMode mode);
-/// @brief モードを選択し，command interface との整合性を確認する。
-/// @note モード名が空なら interface 名から選択する。
+/// @brief モードを選択し，command interface との整合性を確認する
+/// @note モード名が空なら interface 名から選択する
 ControlMode resolve_control_mode(std::string_view mode_name, std::string_view interface_name);
-/// @brief 速度指令を使う velocity / current_velocity か判定する。
+/// @brief 速度指令を使う velocity / current_velocity か判定する
 bool is_velocity_mode(ControlMode mode);
 
 struct MotorConfig
@@ -120,7 +120,7 @@ void validate_configs(const std::vector<MotorConfig> &configs);
 bool feedback_fresh(
   const std::optional<TimePoint> &received_at, TimePoint now, std::chrono::milliseconds timeout);
 
-  /// @brief 指令値の有限性と，選択したモードの範囲を検査
+/// @brief 指令値の有限性と，選択したモードの範囲を検査
 bool command_is_valid(const MotorConfig &cfg, double value);
 
 /// @brief モードに必要な STATUS の鮮度と位置範囲から準備状態を判定
@@ -151,7 +151,7 @@ public:
   /// @param now 受信した単調時刻
   /// @return 状態を更新した場合は true
   bool receive(const can_msgs::msg::Frame &frame, TimePoint now);
-  
+
   /// @brief 全台のフィードバックが最新で，位置条件を満たすか判定
   bool ready(TimePoint now) const;
 
@@ -214,7 +214,7 @@ private:
   bool check_commands(TimePoint now);
 
   /// @brief 4 モードの指令生成と電流起動から速度制御への移行
-  /// @return 生成フレーム。異常時は nullopt
+  /// @return 生成フレーム，異常時は nullopt
   std::optional<can_msgs::msg::Frame> make_frame(std::size_t idx, TimePoint now);
   std::vector<MotorConfig> configs_;
   std::vector<MotorState> states_;
@@ -237,7 +237,7 @@ struct TransportOptions
 class CanTransport
 {
 public:
-  /// @brief CAN トピックと周期タイマーを作成する。executor は start() で起動
+  /// @brief CAN トピックと周期タイマーを作成する，executor は start() で起動
   /// @param configs モータ設定（登録順）
   /// @param opts トピック名と送信周期
   /// @param can_node 通信専用 executor に登録するノード
@@ -246,7 +246,7 @@ public:
 
   /// @brief shutdown() を呼び，専用スレッドと通信処理を終了
   ~CanTransport();
-  
+
   /// @brief 通信リソースのコピーを禁止する
   CanTransport(const CanTransport &) = delete;
 
@@ -262,7 +262,7 @@ public:
   void shutdown() noexcept;
 
   /// @brief 全台の必要なフィードバックが揃うまで待機
-  /// @return 準備完了で true。時間切れ・終了要求で false
+  /// @return 準備完了で true，時間切れ・終了要求で false
   bool wait_ready(std::chrono::milliseconds timeout);
 
   /// @brief フィードバックを確認して有効化し，成功時に旧指令と異常を解除
@@ -292,19 +292,19 @@ public:
   }
 
   /// @brief ロックを待たずに全台の最新指令を保存
-  /// @param values 登録順の指令値配列。単位は各モータのモードに従う
-  /// @return 保存時は true。不正入力・無効状態・ロック競合で false
+  /// @param values 登録順の指令値配列，単位は各モータのモードに従う
+  /// @return 保存時は true，不正入力・無効状態・ロック競合で false
   bool try_set_commands(const std::vector<double> &values);
 
   /// @brief ロックを取得し，1 台の最新指令を保存
   /// @param motor_idx 登録順のモータ添字
   /// @param value モードの単位に従う指令値
-  /// @return 受理時は true。不正入力・無効状態で false
+  /// @return 受理時は true，不正入力・無効状態で false
   bool set_command(std::size_t motor_idx, double value);
 
   /// @brief ロックを待たずに状態を事前確保済みの配列へコピー
   /// @param[out] states モータ数と同じサイズの出力配列
-  /// @return コピー時は true。サイズ不一致・ロック競合で false
+  /// @return コピー時は true，サイズ不一致・ロック競合で false
   bool try_snapshot(std::vector<MotorState> &states);
 
   /// @brief ロックを取得し，全台の最終受信状態を登録順でコピー
@@ -325,7 +325,7 @@ private:
 
   /// @brief 停止要求を反映し，ROS 時刻を付けて CAN フレームを配信
   void publish_frames();
-  
+
   DriverCore core_;
   TransportOptions opts_;
   rclcpp::Node::SharedPtr can_node_;

@@ -9,11 +9,15 @@ find_package(ament_cmake REQUIRED)
 find_package(can_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(std_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(vesc_msgs REQUIRED)
 find_package(Threads REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/MotorCommands.msg"
+)
+rosidl_get_typesupport_target(command_typesupport ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 add_library(vesc_can_driver_protocol SHARED src/vesc_protocol.cpp)
 add_library(vesc_can_driver::protocol ALIAS vesc_can_driver_protocol)
@@ -38,7 +42,7 @@ target_link_libraries(vesc_can_driver_state PUBLIC
 
 add_executable(vesc_node src/vesc_node.cpp)
 target_link_libraries(vesc_node PRIVATE vesc_can_driver::driver vesc_can_driver::state
-  ${sensor_msgs_TARGETS} ${diagnostic_msgs_TARGETS} ${std_msgs_TARGETS} ${std_srvs_TARGETS})
+  "${command_typesupport}" ${diagnostic_msgs_TARGETS} ${std_srvs_TARGETS})
 # Installed even with BUILD_TESTING=OFF so use_mock launch demos remain available.
 add_executable(fake_vesc_node test/support/fake_vesc_node.cpp)
 target_link_libraries(fake_vesc_node PRIVATE vesc_can_driver::driver rclcpp::rclcpp)
@@ -63,5 +67,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_vesc_can_driver HAS_LIBRARY_TARGET NAMESPACE vesc_can_driver::)
-ament_export_dependencies(can_msgs rclcpp vesc_msgs Threads)
+ament_export_dependencies(can_msgs rclcpp rosidl_default_runtime vesc_msgs Threads)
 ament_package()

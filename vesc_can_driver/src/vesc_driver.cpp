@@ -87,7 +87,7 @@ double apply_direction(const MotorConfig &cfg, double current_a)
 // Configuration validation.
 namespace
 {
-/// @brief 1 台の設定・時間・モード固有の指令範囲を検査する。
+/// @brief 1 台の設定・時間・モード固有の指令範囲を検査する
 void validate_config(const MotorConfig &cfg)
 {
   command_interface(cfg.mode);  // Reject invalid enum values as well.
@@ -192,7 +192,7 @@ bool state_ready(const MotorConfig &cfg, const MotorState &state, TimePoint now)
 
 namespace
 {
-/// @brief 関節方向の電流 [A] を VESC 方向へ変換して指令フレームを作る。
+/// @brief 関節方向の電流 [A] を VESC 方向へ変換して指令フレームを作る
 can_msgs::msg::Frame make_current_frame(const MotorConfig &cfg, double current_a)
 {
   return protocol::make_set_current_frame(cfg.controller_id, apply_direction(cfg, current_a));
