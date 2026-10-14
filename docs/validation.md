@@ -226,3 +226,32 @@ Lyrical でドライバ単体と ros2_control plugin を再ビルドし、既存
 `colcon test-result` は `42 tests, 0 errors, 0 failures, 0 skipped` でした。
 外部 CMake 利用者のビルド・実行、起動設定の解決、変更箇所の clang-format、
 Python 3 ファイルの Black と `git diff --check` も成功しています。
+
+## 周期送信・共通状態配信・終了処理の整理後の検証
+
+2026-10-14、CAN 指令を各モータ 100 Hz、通常ノードと ros2_control の
+`JointState` / `VescStateStamped` を 50 Hz に揃えました。
+controller_manager の `update_rate` は 100 のままで、state interface の取得・
+オドメトリ controller は ROS 状態トピックの周期と独立しています。
+状態配信は共通の `MotorStatePublisher` で行い、hardware read/write では配信しません。
+
+CAN の時刻付与・停止要求の反映・配信を `publish_frames()` にまとめ、終了時にも共用しました。
+停止中に毎周期繰り返していた初期化、通常ノードの終了用ラッパー、模擬ノードの固定 DLC 引数を
+省略しました。参照調査で少数だった関数は ROS が呼ぶ lifecycle callback で、維持しています。
+
+1 回の指令入力から 100 Hz の送信が続く単体テストと、無効な周期設定を拒否する
+hardware テストを追加しました。統合テストでは指令入力を 25 Hz にし、
+CAN 指令・モータ状態・関節状態の周期を測定しています。受信キューの滞留と区別するため、
+周期の計算は各メッセージの送信時刻を使用します。
+
+| 模擬構成 | CAN 指令（各モータ） | VescStateStamped（各モータ） | JointState |
+|---|---|---|---|
+| ros2_control、4 モード混在 | 100.0 Hz（4 台とも） | 50.0 Hz（4 台とも） | 50.0 Hz |
+| 通常ノード、駆動・操舵 | 100.0 Hz（2 台とも） | 50.0 Hz（2 台とも） | 50.0 Hz |
+
+controller_manager の実パラメータが `update_rate=100` であることも確認しました。
+元の 37 ケースと追加 2 ケースを合わせた **39 ケースが成功**しました。
+最終の `colcon test-result` は `44 tests, 0 errors, 0 failures, 0 skipped` です。
+ドライバ単体と hardware plugin のビルド、新しい state_publisher target の外部 CMake 利用、
+clang-format、Black、`git diff --check` も成功しています。
+上表は模擬環境での ROS メッセージの実測で、実 CAN バスや Zenoh pico 経路の測定ではありません。

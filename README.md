@@ -10,7 +10,7 @@ have different hardware APIs and have not been validated. The C++ library explic
 requires C++20, matching the Lyrical dependencies. This is a development
 package; no ROS apt release or physical-hardware validation is claimed.
 
-Local validation (2026-10-14): Lyrical build and all 37 test cases passed with
+Local validation (2026-10-14): Lyrical build and all 39 test cases passed with
 `rmw_fastrtps_cpp`, including standalone and ros2_control integration tests.
 Installed codec usage and a `BUILD_TESTING=OFF` build also passed.
 See the [validation report](docs/validation.md). The physical CAN bus
@@ -19,6 +19,10 @@ and Zenoh pico gateway have not been exercised.
 Motor modes: `current` (motor A signed in the joint direction), `velocity` (joint rad/s),
 `position` (joint rad), and `current_velocity` (current startup followed by velocity control).
 Both standalone and ros2_control use the same driver functions for all four modes.
+
+Default rates: CAN commands are sent at 100 Hz per motor; ros2_control state interfaces
+update at 100 Hz. JointState and per-motor VescStateStamped topics publish at 50 Hz
+in both frontends. See the [rate settings](vesc_can_ros2_control/README.md#更新と状態配信の周期).
 
 - [CAN protocol, standalone node and bridge configuration (日本語)](vesc_can_driver/README.md)
 - [ros2_control plugin and controller examples (日本語)](vesc_can_ros2_control/README.md)

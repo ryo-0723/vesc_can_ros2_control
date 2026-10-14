@@ -13,6 +13,7 @@ controller_manager:
       type: forward_command_controller/ForwardCommandController
 joint_state_broadcaster:
   ros__parameters:
+    update_rate: 50
     joints: [drive_joint, steer_joint, current_joint, hybrid_joint]
     interfaces: [position, velocity]
 drive_controller:

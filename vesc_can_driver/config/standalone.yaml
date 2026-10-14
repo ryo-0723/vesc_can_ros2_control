@@ -3,7 +3,7 @@
     can_tx_topic: /can/tx
     can_rx_topic: /can/rx
     update_period_ms: 10
-    state_publish_period_ms: 100
+    state_publish_period_ms: 20
     auto_enable_once: false
     motors: [drive_joint, steer_joint]
     drive_joint:

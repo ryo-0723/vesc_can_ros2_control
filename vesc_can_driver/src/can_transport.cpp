@@ -6,12 +6,10 @@
 
 namespace vesc_can_driver
 {
-CanTransport::CanTransport(std::vector<MotorConfig> configs,
-  TransportOptions opts, rclcpp::Node::SharedPtr can_node)
-  : core_(std::move(configs))
-  , opts_(std::move(opts))
-  , can_node_(std::move(can_node))
-  , pending_cmds_(core_.motor_configs().size())
+CanTransport::CanTransport(
+  std::vector<MotorConfig> configs, TransportOptions opts, rclcpp::Node::SharedPtr can_node)
+  : core_(std::move(configs)), opts_(std::move(opts)), can_node_(std::move(can_node)),
+    pending_cmds_(core_.motor_configs().size())
 {
   if (!can_node_ || opts_.send_period.count() <= 0 || opts_.tx_topic.empty() ||
       opts_.rx_topic.empty() || opts_.tx_topic == opts_.rx_topic) {
@@ -72,13 +70,8 @@ void CanTransport::shutdown() noexcept
   }
   try {
     if (rclcpp::ok(can_node_->get_node_base_interface()->get_context())) {
-      std::vector<can_msgs::msg::Frame> stop_frames;
-      stop_frames.reserve(core_.motor_configs().size());
-      core_.stop_frames(stop_frames);
-      for (auto &frame : stop_frames) {
-        frame.header.stamp = can_node_->now();
-        tx_pub_->publish(frame);
-      }
+      core_.stop_frames(cmd_frames_);
+      publish_frames();
     }
   } catch (const std::exception &) {
     // Destruction cannot guarantee network delivery; MCU/VESC watchdogs remain necessary.
@@ -135,7 +128,7 @@ bool CanTransport::try_set_commands(const std::vector<double> &values)
   }
   const auto received_at = SteadyClock::now();
   for (std::size_t motor_idx = 0; motor_idx < values.size(); ++motor_idx) {
-    pending_cmds_[motor_idx] = {values[motor_idx], received_at, true};
+    pending_cmds_[motor_idx] = {values[motor_idx], received_at};
   }
   return true;
 }
@@ -150,7 +143,7 @@ bool CanTransport::set_command(std::size_t motor_idx, double value)
     return false;
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  pending_cmds_[motor_idx] = {value, SteadyClock::now(), true};
+  pending_cmds_[motor_idx] = {value, SteadyClock::now()};
   return true;
 }
 
@@ -186,15 +179,14 @@ void CanTransport::send_commands()
     if (stop_requested_.load()) {
       if (fault_requested_.exchange(false)) {
         core_.stop_on_error("Stop requested by hardware/topic command validation");
+        std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
       }
-      core_.disable();
-      std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
     } else {
       for (std::size_t motor_idx = 0; motor_idx < pending_cmds_.size(); ++motor_idx) {
-        if (pending_cmds_[motor_idx].updated) {
-          core_.set_command(
-            motor_idx, pending_cmds_[motor_idx].value, pending_cmds_[motor_idx].received_at);
-          pending_cmds_[motor_idx].updated = false;
+        auto &cmd = pending_cmds_[motor_idx];
+        if (cmd.received_at) {
+          core_.set_command(motor_idx, cmd.value, *cmd.received_at);
+          cmd.received_at.reset();
         }
       }
     }
@@ -202,6 +194,11 @@ void CanTransport::send_commands()
     enabled_.store(core_.enabled());
     faulted_.store(core_.faulted());
   }
+  publish_frames();
+}
+
+void CanTransport::publish_frames()
+{
   for (auto &frame : cmd_frames_) {
     // A concurrent disable must not leave a previously prepared motion command in flight.
     if (stop_requested_.load()) {

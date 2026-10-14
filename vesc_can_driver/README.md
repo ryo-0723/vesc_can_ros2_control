@@ -16,6 +16,7 @@ VESC のネイティブ CAN フレームを encode/decode するライブラリ�
 | vesc_can_driver::core | vesc_can_driver/driver_core.hpp | 関節単位への変換、複数台の状態、範囲・鮮度・停止の管理 |
 | vesc_can_driver::transport | vesc_can_driver/can_transport.hpp | CAN トピックの送受信、専用 executor と指令 mailbox |
 | vesc_can_driver::state_conversion | vesc_can_driver/vesc_state_conversion.hpp | 受信した状態を vesc_msgs に変換 |
+| vesc_can_driver::state_publisher | vesc_can_driver/motor_state_publisher.hpp | モータごとの VescStateStamped 配信を通常ノードと hardware plugin で共用 |
 
 encode/decode だけを使う場合は protocol target にリンクします。このライブラリは
 ROS ノードや executor を起動せず、rclcpp や hardware_interface にリンクしません。
@@ -82,7 +83,10 @@ ros2 topic echo /vesc_can_ros2_control/motors/drive_joint/state
 
 旧独自メッセージ、SetPosition.srv、logical_id 設定は廃止しました。
 状態値の取得範囲、未取得値、旧 API の移行は [メッセージ対応表](../docs/messages.md) を参照してください。
-通常ノードの状態・診断周期は `state_publish_period_ms` (既定 100 ms) で指定します。
+通常ノードの CAN 指令は `update_period_ms` (既定 10 ms、各モータ 100 Hz)、
+状態・診断は `state_publish_period_ms` (既定 20 ms、50 Hz) で周期的に配信します。
+指令コールバックは最新値を渡し、CAN 送信自体は専用 executor のタイマーが行います。
+状態の配信周期と VESC 自体の STATUS 送信周期は独立しています。
 
 通常ノードだけの従来設定 max_rpm / rpm_slew_rate はモータ機械 RPM / RPM毎秒です。
 pole_pairs の既定は 7。startup_current_a の既定は **0** に変更しており、

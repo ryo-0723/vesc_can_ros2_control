@@ -5,12 +5,13 @@
 | パッケージ | 内容 | 他のパッケージとの関係 |
 |---|---|---|
 | vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC | vesc_msgs を使用。ros2_control への依存なし |
-| vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の transport ライブラリを使用 |
+| vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の transport / state_publisher を使用 |
 | vesc_msgs | 上流由来の ROS メッセージ | 両ドライバとは独立したインターフェース定義 |
 
 `vesc_can_driver::protocol` は encode/decode だけの公開 CMake target です。
 共通の状態管理は `vesc_can_driver::core`、CAN トピック処理は `vesc_can_driver::transport`、
 vesc_msgs への変換は `vesc_can_driver::state_conversion` に分けてリンクできます。
+共通の ROS 状態配信は `vesc_can_driver::state_publisher` が担当します。
 protocol/core は ROS ノードを起動しません。
 パッケージを分割しても、ライブラリ間の呼び出しにトピック中継や追加スレッドは
 発生しません。実行時の CAN executor と mailbox の構成は以下のとおりです。
@@ -91,9 +92,15 @@ ros2_control の ActuatorInterface があり、USB/UART 接続では有用な候
 通信の置き換え、CAN STATUS の状態取得、複数関節の System 化が必要です。
 本実装は同プロジェクトのコードをコピーせず、CAN 境界を共有する構成を採用します。
 
-通常ノードの状態配信はモータごとに `vesc_msgs/msg/VescStateStamped` の publisher を
-持ちます。同じ 1 つの状態配信タイマーで全台を処理し、モータごとのノードやスレッドは
-追加しません。上流メッセージの生成はメイン executor の状態配信周期で行い、
-ros2_control の read/write では行いません。STATUS1〜6 を解釈できる実装でも、
+通常ノードと hardware plugin は、共通の `MotorStatePublisher` でモータごとの
+`vesc_msgs/msg/VescStateStamped` を 50 Hz で配信します。1 つの状態タイマーで全台を処理し、
+通常ノードではメイン executor、hardware plugin では既存の CAN executor が実行します。
+モータごとのノードやスレッドは追加しません。ros2_control の read/write は 100 Hz で
+state interface と指令を受け渡し、メッセージの生成・配信は行いません。
+joint_state_broadcaster は 50 Hz に設定しています。
+[controller_manager の公式仕様](https://control.ros.org/master/doc/ros2_control/controller_manager/doc/userdoc.html#parameters)
+でも、manager の update_rate は hardware の read / controller の update / hardware の write の周期です。
+CAN 送信は両方の入口で各モータ 100 Hz です。例えば 4 台の指令は合計 400 frames/s になります。
+STATUS1〜6 を解釈できる実装でも、
 全 STATUS を常時送信する必要はありません。制御に必要な種類と診断用の低頻度データを
 VESC Tool 側で選び、CAN と Zenoh の負荷を調整してください。

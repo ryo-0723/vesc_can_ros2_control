@@ -50,6 +50,11 @@ int get_integer_parameter(const Parameters &params, const std::string &name, int
 }
 }  // namespace
 
+VescSystem::~VescSystem()
+{
+  release_can_transport();
+}
+
 VescSystem::StateField VescSystem::state_field_from_name(const std::string &interface_name)
 {
   if (interface_name == hardware_interface::HW_IF_POSITION) {
@@ -143,8 +148,11 @@ hardware_interface::CallbackReturn VescSystem::on_init(
       std::chrono::milliseconds(get_integer_parameter(hw_params, "send_period_ms", 10));
     activation_timeout_ =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "activation_timeout_ms", 2000));
-    if (opts_.send_period.count() <= 0 || activation_timeout_.count() <= 0) {
-      throw std::invalid_argument("Transport and activation periods must be positive");
+    state_period_ =
+      std::chrono::milliseconds(get_integer_parameter(hw_params, "state_publish_period_ms", 20));
+    if (opts_.send_period.count() <= 0 || activation_timeout_.count() <= 0 ||
+        state_period_.count() <= 0) {
+      throw std::invalid_argument("Transport, activation and state periods must be positive");
     }
     configs_.clear();
     configs_.reserve(hw_info.joints.size());
@@ -191,6 +199,12 @@ hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecyc
     auto can_node =
       std::make_shared<rclcpp::Node>(get_hardware_info().name + "_can_io", node_ns, node_opts);
     transport_ = std::make_unique<vesc_can_driver::CanTransport>(configs_, opts_, can_node);
+    state_pub_ = std::make_unique<vesc_can_driver::MotorStatePublisher>(*can_node, configs_);
+    state_timer_ =
+      can_node->create_wall_timer(state_period_, [this, clock = can_node->get_clock()]() {
+        const auto states = transport_->snapshot();
+        state_pub_->publish(states, vesc_can_driver::SteadyClock::now(), clock->now());
+      });
     transport_->start();
     return hardware_interface::CallbackReturn::SUCCESS;
   } catch (const std::exception &error) {
@@ -232,6 +246,11 @@ hardware_interface::CallbackReturn VescSystem::on_deactivate(const rclcpp_lifecy
 void VescSystem::release_can_transport()
 {
   active_ = false;
+  if (transport_) {
+    transport_->shutdown();
+  }
+  state_timer_.reset();
+  state_pub_.reset();
   transport_.reset();
 }
 

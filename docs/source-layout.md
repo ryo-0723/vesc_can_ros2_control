@@ -10,11 +10,12 @@
 | `vesc_can_driver/src/driver_core.cpp` | 関節単位変換、制御モード、範囲・期限の検査、全台停止 | `vesc_can_driver::core` |
 | `vesc_can_driver/src/can_transport.cpp` | ROS の CAN トピックと専用 executor、指令の受け渡し | `vesc_can_driver::transport` |
 | `vesc_can_driver/src/vesc_state_conversion.cpp` | 受信した生値から `vesc_msgs` への変換 | `vesc_can_driver::state_conversion` |
+| `vesc_can_driver/src/motor_state_publisher.cpp` | モータごとの ROS 状態トピックを作成・配信 | `vesc_can_driver::state_publisher` |
 | `vesc_can_driver/src/vesc_node.cpp` | トピック・サービスで動かす通常ノード | `vesc_node` |
 | `vesc_can_ros2_control/src/vesc_system.cpp` | ros2_control の設定、lifecycle、read/write | `vesc_hardware` |
 | `vesc_can_driver/test/support/fake_vesc_node.cpp` | CAN 指令に応答する模擬 VESC | `fake_vesc_node`、デモと統合テスト |
 
-現在の `src` に未使用の `.cpp` はありません。protocol、core、transport、state_conversion は
+現在の `src` に未使用の `.cpp` はありません。protocol、core、transport、state_conversion、state_publisher は
 別々のライブラリで、単独利用と通常ノード・hardware plugin 間の共通化に使います。
 通常ノードは controller_manager を使わない利用者向けの入口です。
 4 モードの選択・指令範囲の検査・電流と速度の送信処理は `driver_core.cpp` に集約し、
@@ -30,7 +31,8 @@
 
 `vesc_state_conversion` を独立させることで、上流 `vesc_msgs` への変換を
 制御ロジックから切り離して検証できます。変換処理は小さいものの、独立した役割があります。
-通常ノードは状態配信で利用し、hardware plugin は transport を利用します。
+通常ノードと hardware plugin は `MotorStatePublisher` からこの変換を利用します。
+状態トピックの作成と配信を共用し、hardware read/write に ROS 配信を持ち込みません。
 今回はこの分割を維持し、モードごとにファイルを増やしてはいません。
 
 ## driver_core の命名と関数の分担
@@ -109,6 +111,22 @@ Python のテストでも `vel_pub` / `pos_pub` / `current_pub` / `hybrid_pub` �
 `tx_topic` / `rx_topic` に短縮しました。直接使う C++ コードはメンバ参照の更新が必要です。
 ROS 設定のキーは引き続き `can_tx_topic` / `can_rx_topic`、送信周期の C++ メンバは `send_period` です。
 設定キー、トピック名、標準・上流メッセージの項目名は維持しています。
+
+## 周期送信と終了処理の分担
+
+CAN 指令は各モータ 100 Hz、通常ノードと ros2_control の ROS 状態トピックは 50 Hz です。
+ros2_control の state interface は controller_manager の 100 Hz で更新します。
+既定値と同梱設定を揃え、CAN の周期と ROS 状態の周期は独立したタイマーで扱います。
+
+`CanTransport::send_commands()` は最新指令と状態を検査してフレームを作り、
+`publish_frames()` は停止要求の反映・時刻の付与・送信を担当します。
+終了時も後者を共用し、送信済みフレーム用のバッファを再利用します。
+未処理の指令は optional の受信時刻で表し、停止中に同じ指令配列を毎周期初期化する処理を除きました。
+
+通常ノードの `stop()` ラッパーは削除し、`CanTransport` のデストラクタで停止・join を行います。
+hardware plugin は状態タイマーも持つため、transport の停止・join の後にタイマーと publisher を破棄します。
+ROS が呼ぶ lifecycle callback と、安全検査・状態取得・単位変換に必要な関数は維持しています。
+模擬ノードの STATUS 作成は DLC=8 に統一し、常に 8 を渡す引数を削除しました。
 
 ## 起動例とテスト用ファイル
 

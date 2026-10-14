@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -12,12 +11,10 @@
 #include "std_msgs/msg/float64.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "vesc_can_driver/can_transport.hpp"
-#include "vesc_can_driver/vesc_state_conversion.hpp"
-#include "vesc_msgs/msg/vesc_state_stamped.hpp"
+#include "vesc_can_driver/motor_state_publisher.hpp"
 
 namespace vesc_can_driver
 {
-using VescStateStamped = vesc_msgs::msg::VescStateStamped;
 using Float64 = std_msgs::msg::Float64;
 using JointState = sensor_msgs::msg::JointState;
 using DiagnosticStatus = diagnostic_msgs::msg::DiagnosticStatus;
@@ -33,9 +30,9 @@ public:
     opts.tx_topic = declare_parameter<std::string>("can_tx_topic", "/socketcan_bridge/tx");
     opts.rx_topic = declare_parameter<std::string>("can_rx_topic", "/socketcan_bridge/rx");
     opts.send_period =
-      std::chrono::milliseconds(declare_parameter<std::int64_t>("update_period_ms", 20));
+      std::chrono::milliseconds(declare_parameter<std::int64_t>("update_period_ms", 10));
     const auto state_period =
-      std::chrono::milliseconds(declare_parameter<std::int64_t>("state_publish_period_ms", 100));
+      std::chrono::milliseconds(declare_parameter<std::int64_t>("state_publish_period_ms", 20));
 
     if (state_period.count() <= 0) {
       throw std::invalid_argument("State period must be positive");
@@ -51,14 +48,7 @@ public:
     }
     initialize_can_transport(opts);
     initialize_command_interfaces();
-    initialize_state_publishers();
-    state_timer_ = create_wall_timer(state_period, [this]() { publish_states(); });
-  }
-
-  void stop()
-  {
-    transport_->disable();
-    transport_->shutdown();
+    initialize_state_publishers(state_period);
   }
 
 private:
@@ -77,8 +67,7 @@ private:
     const auto default_interface =
       mode_name.empty() ? std::string("velocity")
                         : std::string(command_interface(parse_control_mode(mode_name)));
-    const auto cmd_interface =
-      declare_parameter<std::string>(prefix + "command_interface", default_interface);
+    const auto cmd_interface = declare_parameter<std::string>(prefix + "command_interface", default_interface);
     cfg.mode = resolve_control_mode(mode_name, cmd_interface);
     cfg.pole_pairs = declare_parameter<double>(prefix + "pole_pairs", 7.0);
     cfg.gear_ratio = declare_parameter<double>(prefix + "gear_ratio", 1.0);
@@ -132,15 +121,12 @@ private:
       });
   }
 
-  void initialize_state_publishers()
+  void initialize_state_publishers(std::chrono::milliseconds period)
   {
-    state_pubs_.reserve(configs_.size());
-    for (const auto &cfg : configs_) {
-      state_pubs_.push_back(
-        create_publisher<VescStateStamped>("~/motors/" + cfg.name + "/state", 10));
-    }
+    state_pub_ = std::make_unique<MotorStatePublisher>(*this, configs_);
     joint_state_pub_ = create_publisher<JointState>("~/joint_states", 10);
     diag_pub_ = create_publisher<DiagnosticArray>("/diagnostics", 10);
+    state_timer_ = create_wall_timer(period, [this]() { publish_states(); });
   }
 
   void handle_joint_commands(const JointState &msg)
@@ -252,6 +238,7 @@ private:
     const auto states = transport_->snapshot();
     const auto steady_now = SteadyClock::now();
     const auto stamp = now();
+    state_pub_->publish(states, steady_now, stamp);
     const bool enabled = transport_->enabled();
     const bool faulted = transport_->faulted();
     const auto fault_reason = faulted ? transport_->fault_reason() : std::string{};
@@ -263,10 +250,6 @@ private:
       const auto &cfg = configs_[motor_idx];
       const auto &state = states[motor_idx];
       const bool ready = state_ready(cfg, state, steady_now);
-      VescStateStamped vesc_msg;
-      vesc_msg.header.stamp = stamp;
-      vesc_msg.state = make_vesc_state(cfg, state, steady_now);
-      state_pubs_[motor_idx]->publish(vesc_msg);
       const bool pos_fresh = cfg.mode == ControlMode::Position
                                ? ready
                                : feedback_fresh(state.status5_at, steady_now, cfg.feedback_timeout);
@@ -286,7 +269,7 @@ private:
   std::vector<rclcpp::Subscription<Float64>::SharedPtr> cmd_subs_;
   rclcpp::Subscription<JointState>::SharedPtr joint_cmd_sub_;
   rclcpp::Service<SetBool>::SharedPtr enable_srv_;
-  std::vector<rclcpp::Publisher<VescStateStamped>::SharedPtr> state_pubs_;
+  std::unique_ptr<MotorStatePublisher> state_pub_;
   rclcpp::Publisher<JointState>::SharedPtr joint_state_pub_;
   rclcpp::Publisher<DiagnosticArray>::SharedPtr diag_pub_;
   rclcpp::TimerBase::SharedPtr state_timer_;
@@ -300,7 +283,6 @@ int main(int argc, char **argv)
   try {
     auto node = std::make_shared<vesc_can_driver::VescNode>();
     rclcpp::spin(node);
-    node->stop();
   } catch (const std::exception &error) {
     RCLCPP_ERROR(rclcpp::get_logger("vesc_node"), "%s", error.what());
     exit_code = 1;

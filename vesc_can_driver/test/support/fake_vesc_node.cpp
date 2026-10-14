@@ -126,29 +126,28 @@ private:
     motor_it->cmd_at = SteadyClock::now();
   }
 
-  can_msgs::msg::Frame make_status_frame(
-    const FakeMotor &motor, std::uint32_t packet_id, std::uint8_t dlc)
+  can_msgs::msg::Frame make_status_frame(const FakeMotor &motor, std::uint32_t packet_id)
   {
     can_msgs::msg::Frame frame;
     frame.header.stamp = now();
     frame.id = (packet_id << protocol::kPacketIdShift) | motor.controller_id;
     frame.is_extended = true;
-    frame.dlc = dlc;
+    frame.dlc = 8;
     return frame;
   }
 
   void publish_motor_feedback(const FakeMotor &motor)
   {
-    auto status_1 = make_status_frame(motor, protocol::kStatus1Id, 8);
+    auto status_1 = make_status_frame(motor, protocol::kStatus1Id);
     write_big_endian(status_1.data, 0, std::llround(motor.electrical_rpm), 4);
     write_big_endian(status_1.data, 4, std::llround(motor.motor_current_a * 10.0), 2);
     feedback_pub_->publish(status_1);
 
-    auto status_2 = make_status_frame(motor, protocol::kStatus2Id, 8);
+    auto status_2 = make_status_frame(motor, protocol::kStatus2Id);
     write_big_endian(status_2.data, 0, 12500, 4);  // Fixture: 1.25 Ah drawn.
     write_big_endian(status_2.data, 4, 5000, 4);   // Fixture: 0.5 Ah regenerated.
     feedback_pub_->publish(status_2);
-    auto status_3 = make_status_frame(motor, protocol::kStatus3Id, 8);
+    auto status_3 = make_status_frame(motor, protocol::kStatus3Id);
     write_big_endian(status_3.data, 0, 120000, 4);  // Fixture: 12 Wh drawn.
     write_big_endian(status_3.data, 4, 10000, 4);   // Fixture: 1 Wh regenerated.
     feedback_pub_->publish(status_3);
@@ -157,19 +156,19 @@ private:
     if (pos_deg < 0.0) {
       pos_deg += 360.0;
     }
-    auto status_4 = make_status_frame(motor, protocol::kStatus4Id, 8);
+    auto status_4 = make_status_frame(motor, protocol::kStatus4Id);
     write_big_endian(status_4.data, 0, 300, 2);  // FET temperature: 30 C.
     write_big_endian(status_4.data, 2, 310, 2);  // Motor temperature: 31 C.
     write_big_endian(status_4.data, 6, std::llround(pos_deg * 50.0), 2);
     feedback_pub_->publish(status_4);
 
-    auto status_5 = make_status_frame(motor, protocol::kStatus5Id, 8);
+    auto status_5 = make_status_frame(motor, protocol::kStatus5Id);
     const auto tachometer_counts = std::llround(motor.pos_rad * 6.0 * pole_pairs_ / (2.0 * kPi));
     write_big_endian(status_5.data, 0, tachometer_counts, 4);
     write_big_endian(status_5.data, 4, 240, 2);  // Input voltage: 24 V.
     feedback_pub_->publish(status_5);
 
-    auto status_6 = make_status_frame(motor, protocol::kStatus6Id, 8);
+    auto status_6 = make_status_frame(motor, protocol::kStatus6Id);
     write_big_endian(status_6.data, 0, 1100, 2);  // Fixture: 1.1 V.
     write_big_endian(status_6.data, 2, 2200, 2);  // Fixture: 2.2 V.
     write_big_endian(status_6.data, 4, 3300, 2);  // Fixture: 3.3 V.

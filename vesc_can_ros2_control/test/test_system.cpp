@@ -141,5 +141,17 @@ TEST_F(SystemConfigurationTest, RejectsMismatchedOrIncompleteHybridSettings)
   EXPECT_EQ(excess_current.init(params), hardware_interface::CallbackReturn::ERROR);
 }
 
+TEST_F(SystemConfigurationTest, RejectsInvalidHardwarePeriods)
+{
+  for (const auto &name : {"send_period_ms", "state_publish_period_ms", "activation_timeout_ms"}) {
+    for (const auto &value : {"0", "-1", "1.5"}) {
+      auto params = make_parameters();
+      params.hardware_info.hardware_parameters[name] = value;
+      VescSystem hardware;
+      EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
+    }
+  }
+}
+
 }  // namespace
 }  // namespace vesc_can_ros2_control

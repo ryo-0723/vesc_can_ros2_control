@@ -14,7 +14,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 import launch_testing
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
+from rclpy.time import Time
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Float64MultiArray
 from std_srvs.srv import SetBool
@@ -104,11 +105,17 @@ class IntegrationTest(unittest.TestCase):
         self.joints = None
         self.vesc_states = {}
         self.diagnostics = {}
+        self.frame_times = {}
+        self.joint_times = []
+        self.vesc_times = {}
 
     def tearDown(self):
         self.node.destroy_node()
 
     def observe_frame(self, msg):
+        self.frame_times.setdefault(msg.id & 255, []).append(
+            Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        )
         self.frames[msg.id & 255] = (
             msg.id >> 8,
             int.from_bytes(bytes(msg.data[:4]), "big", signed=True),
@@ -117,6 +124,32 @@ class IntegrationTest(unittest.TestCase):
 
     def observe_joints(self, msg):
         self.joints = msg
+        self.joint_times.append(Time.from_msg(msg.header.stamp).nanoseconds * 1e-9)
+
+    def observe_vesc_state(self, msg):
+        self.vesc_states[msg.state.controller_id] = msg.state
+        self.vesc_times.setdefault(msg.state.controller_id, []).append(
+            Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        )
+
+    def measure_rates(self, action):
+        self.frame_times.clear()
+        self.joint_times.clear()
+        self.vesc_times.clear()
+        deadline = time.monotonic() + 1.0
+        next_cmd = time.monotonic()
+        while time.monotonic() < deadline:
+            if time.monotonic() >= next_cmd:
+                action()  # Commands at 25 Hz; CAN output remains independently periodic at 100 Hz.
+                next_cmd = time.monotonic() + 0.04
+            rclpy.spin_once(self.node, timeout_sec=0.005)
+
+    def assert_rate(self, samples, expected, label):
+        self.assertGreaterEqual(len(samples), int(expected * 0.5))
+        hz = (len(samples) - 1) / (samples[-1] - samples[0])
+        print(f"{label}: target={expected} Hz, measured={hz:.1f} Hz", flush=True)
+        self.assertGreater(hz, expected * 0.75)
+        self.assertLess(hz, expected * 1.25)
 
     def wait_for(self, condition, timeout=5.0, action=None):
         deadline = time.monotonic() + timeout
@@ -140,6 +173,13 @@ class IntegrationTest(unittest.TestCase):
     def test_01_ros2_control_plugin_mixed_modes_and_feedback_loss(self):
         self.node.create_subscription(Frame, "/control_test/can/tx", self.observe_frame, 100)
         self.node.create_subscription(JointState, "/joint_states", self.observe_joints, 10)
+        for name in ("drive_joint", "steer_joint", "current_joint", "hybrid_joint"):
+            self.node.create_subscription(
+                VescStateStamped,
+                "/VescFourModes_can_io/motors/" + name + "/state",
+                self.observe_vesc_state,
+                10,
+            )
         vel_pub = self.node.create_publisher(Float64MultiArray, "/drive_controller/commands", 1)
         pos_pub = self.node.create_publisher(Float64MultiArray, "/steer_controller/commands", 1)
         current_pub = self.node.create_publisher(
@@ -191,6 +231,21 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(self.frames[12], (1, -1500))
         self.assertEqual(self.frames[31][0], 3)
         self.assertIn((31, 1, 2000), self.frame_history)
+        self.assertTrue(
+            self.wait_for(lambda: len(self.vesc_states) == 4, action=publish_control_commands)
+        )
+        self.assertAlmostEqual(self.vesc_states[12].current_motor, -1.5)
+        rate = self.request(
+            GetParameters,
+            "/controller_manager/get_parameters",
+            GetParameters.Request(names=["update_rate"]),
+        )
+        self.assertEqual(rate.values[0].integer_value, 100)
+        self.measure_rates(publish_control_commands)
+        for id in (11, 21, 12, 31):
+            self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
+            self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
+        self.assert_rate(self.joint_times, 50, "JointState")
         response = self.request(
             SetParameters,
             "/fake_control_vesc/set_parameters",
@@ -229,9 +284,6 @@ class IntegrationTest(unittest.TestCase):
         self.node.create_subscription(Frame, "/topic_test/can/tx", self.observe_frame, 100)
         self.node.create_subscription(JointState, prefix + "/joint_states", self.observe_joints, 10)
 
-        def observe_vesc_state(msg):
-            self.vesc_states[msg.state.controller_id] = msg.state
-
         def observe_diagnostics(msg):
             self.diagnostics = {
                 status.hardware_id: {field.key: field.value for field in status.values}
@@ -242,7 +294,7 @@ class IntegrationTest(unittest.TestCase):
             self.node.create_subscription(
                 VescStateStamped,
                 prefix + "/motors/" + motor_name + "/state",
-                observe_vesc_state,
+                self.observe_vesc_state,
                 10,
             )
         self.node.create_subscription(DiagnosticArray, "/diagnostics", observe_diagnostics, 10)
@@ -279,6 +331,11 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(math.isnan(drive_state.avg_id))
         self.assertEqual(self.diagnostics["vesc_can_id_11"]["adc_1_v"], "1.100000")
         self.assertIn("fault_code", self.diagnostics["vesc_can_id_11"]["unavailable_vesc_fields"])
+        self.measure_rates(publish_motor_commands)
+        for id in (11, 21):
+            self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
+            self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
+        self.assert_rate(self.joint_times, 50, "JointState")
 
         def publish_joint_commands():
             joint_cmd_pub.publish(

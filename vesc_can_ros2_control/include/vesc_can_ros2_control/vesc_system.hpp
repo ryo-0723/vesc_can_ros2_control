@@ -8,12 +8,14 @@
 
 #include "hardware_interface/system_interface.hpp"
 #include "vesc_can_driver/can_transport.hpp"
+#include "vesc_can_driver/motor_state_publisher.hpp"
 
 namespace vesc_can_ros2_control
 {
 class VescSystem : public hardware_interface::SystemInterface
 {
 public:
+  ~VescSystem() override;
   hardware_interface::CallbackReturn on_init(
     const hardware_interface::HardwareComponentInterfaceParams &params) override;
   hardware_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State &) override;
@@ -56,7 +58,10 @@ private:
   std::vector<StateHandle> state_handles_;
   vesc_can_driver::TransportOptions opts_;
   std::chrono::milliseconds activation_timeout_{2000};
+  std::chrono::milliseconds state_period_{20};
   std::unique_ptr<vesc_can_driver::CanTransport> transport_;
+  std::unique_ptr<vesc_can_driver::MotorStatePublisher> state_pub_;
+  rclcpp::TimerBase::SharedPtr state_timer_;
   bool active_{false};
 };
 }  // namespace vesc_can_ros2_control

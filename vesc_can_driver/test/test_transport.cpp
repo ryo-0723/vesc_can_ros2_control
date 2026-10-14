@@ -131,5 +131,67 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
   EXPECT_TRUE(spin_peer_until([&]() { return heartbeat_count >= 2; }, 100ms));
 }
 
+TEST_F(TransportTest, DefaultTimerRepeatsOneCommandAt100Hz)
+{
+  MotorConfig cfg;
+  cfg.name = "current";
+  cfg.controller_id = 11;
+  cfg.mode = ControlMode::Current;
+  cfg.command_timeout = 2s;
+  cfg.feedback_timeout = 2s;
+  TransportOptions opts;
+  opts.tx_topic = "/period_test/tx";
+  opts.rx_topic = "/period_test/rx";
+  auto peer = std::make_shared<rclcpp::Node>("period_test_peer");
+  auto can_node = std::make_shared<rclcpp::Node>("period_test_io");
+  auto feedback_pub =
+    peer->create_publisher<can_msgs::msg::Frame>(opts.rx_topic, rclcpp::SensorDataQoS());
+  std::vector<TimePoint> samples;
+  auto cmd_sub = peer->create_subscription<can_msgs::msg::Frame>(
+    opts.tx_topic, 100, [&](can_msgs::msg::Frame::ConstSharedPtr frame) {
+      if (frame->data == protocol::make_set_current_frame(11, 2.0).data) {
+        samples.push_back(SteadyClock::now());
+      }
+    });
+  auto feedback_timer = peer->create_wall_timer(10ms, [&]() {
+    can_msgs::msg::Frame frame;
+    frame.id = 0x90B;
+    frame.is_extended = true;
+    frame.dlc = 8;
+    feedback_pub->publish(frame);
+  });
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(peer);
+  CanTransport transport({cfg}, opts, can_node);
+  transport.start();
+  auto deadline = SteadyClock::now() + 2s;
+  while (!transport.snapshot()[0].status1_at && SteadyClock::now() < deadline) {
+    exec.spin_some();
+    std::this_thread::sleep_for(1ms);
+  }
+  ASSERT_TRUE(transport.enable());
+  ASSERT_TRUE(transport.set_command(0, 2.0));  // One input; the timer must keep transmitting it.
+  deadline = SteadyClock::now() + 200ms;
+  while (samples.empty() && SteadyClock::now() < deadline) {
+    exec.spin_some();
+    std::this_thread::sleep_for(1ms);
+  }
+  ASSERT_FALSE(samples.empty());
+  samples.clear();
+  deadline = SteadyClock::now() + 600ms;
+  while (SteadyClock::now() < deadline) {
+    exec.spin_some();
+    std::this_thread::sleep_for(1ms);
+  }
+  ASSERT_GE(samples.size(), 48u);
+  ASSERT_LE(samples.size(), 72u);
+  const double hz =
+    (samples.size() - 1) / std::chrono::duration<double>(samples.back() - samples.front()).count();
+  EXPECT_GT(hz, 80.0);
+  EXPECT_LT(hz, 120.0);
+  EXPECT_FALSE(transport.faulted());
+  transport.shutdown();
+}
+
 }  // namespace
 }  // namespace vesc_can_driver

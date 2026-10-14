@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -58,10 +59,10 @@ private:
   struct PendingCommand
   {
     double value{};
-    TimePoint received_at{};
-    bool updated{false};
+    std::optional<TimePoint> received_at;
   };
   void send_commands();
+  void publish_frames();
   DriverCore core_;
   TransportOptions opts_;
   rclcpp::Node::SharedPtr can_node_;

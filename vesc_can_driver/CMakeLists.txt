@@ -41,15 +41,21 @@ set_target_properties(vesc_can_driver_state_conversion PROPERTIES EXPORT_NAME st
 target_link_libraries(vesc_can_driver_state_conversion PUBLIC
   vesc_can_driver::core ${vesc_msgs_TARGETS})
 
+add_library(vesc_can_driver_state_publisher SHARED src/motor_state_publisher.cpp)
+add_library(vesc_can_driver::state_publisher ALIAS vesc_can_driver_state_publisher)
+set_target_properties(vesc_can_driver_state_publisher PROPERTIES EXPORT_NAME state_publisher)
+target_link_libraries(vesc_can_driver_state_publisher PUBLIC
+  vesc_can_driver::state_conversion rclcpp::rclcpp)
+
 add_executable(vesc_node src/vesc_node.cpp)
-target_link_libraries(vesc_node PRIVATE vesc_can_driver::transport vesc_can_driver::state_conversion
+target_link_libraries(vesc_node PRIVATE vesc_can_driver::transport vesc_can_driver::state_publisher
   ${sensor_msgs_TARGETS} ${diagnostic_msgs_TARGETS} ${std_msgs_TARGETS} ${std_srvs_TARGETS})
 # Installed even with BUILD_TESTING=OFF so use_mock launch demos remain available.
 add_executable(fake_vesc_node test/support/fake_vesc_node.cpp)
 target_link_libraries(fake_vesc_node PRIVATE vesc_can_driver::core rclcpp::rclcpp)
 
 install(TARGETS vesc_can_driver_protocol vesc_can_driver_core
-  vesc_can_driver_transport vesc_can_driver_state_conversion
+  vesc_can_driver_transport vesc_can_driver_state_conversion vesc_can_driver_state_publisher
   EXPORT export_vesc_can_driver
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(TARGETS vesc_node fake_vesc_node DESTINATION lib/${PROJECT_NAME})

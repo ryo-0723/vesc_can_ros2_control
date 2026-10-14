@@ -49,7 +49,7 @@ temperature_fet/temperature_motor/input_voltage/duty_cycle の状態を公開で
 | command_timeout_ms | hardware `write()` / 通常ノード入力の期限、既定 500 ms |
 
 hardware パラメータには can_tx_topic、can_rx_topic、send_period_ms (既定 10)、
-activation_timeout_ms (既定 2000) を指定できます。
+state_publish_period_ms (既定 20)、activation_timeout_ms (既定 2000) を指定できます。
 current state interface は関節方向の符号を適用したモータ電流 [A] です。
 電流モードでも position state interface を登録する場合は STATUS5 が必要です。
 4 モードの URDF / controller 設定と起動コマンドは
@@ -85,6 +85,22 @@ plugin は `vesc_can_driver::CanTransport` を利用します。送受信トピ�
 停止フレームと Zenoh pico の条件は [CAN 接続条件](../vesc_can_driver/README.md#can-と-zenoh-pico-の接続条件)
 を参照してください。[構成とスレッド](../docs/architecture.md) に read/write と
 通信 executor の境界を記載しています。
+
+## 更新と状態配信の周期
+
+| 処理 | 同梱設定 | 設定箇所 |
+|---|---|---|
+| CAN 指令の送信（各モータ） | 100 Hz | hardware の `send_period_ms: 10` |
+| state interface の更新・controller 実行 | 100 Hz | controller_manager の `update_rate: 100` |
+| `/joint_states` の配信 | 50 Hz | joint_state_broadcaster の `update_rate: 50` |
+| 各モータの `VescStateStamped` の配信 | 50 Hz | hardware の `state_publish_period_ms: 20` |
+
+state interface を直接読むオドメトリ controller は 100 Hz の更新を使えます。
+`VescStateStamped` は CAN 用 executor の状態タイマーで配信し、read/write では生成・配信しません。
+配信先は `/<ros2_control の name>_can_io/motors/<joint名>/state` です。
+例の `VescFourModes` なら `/VescFourModes_can_io/motors/drive_joint/state` になります。
+namespace を付けた場合はこの先頭に追加されます。電流・温度・電圧などの生値と単位は
+通常ノードと同じ [メッセージ対応表](../docs/messages.md) に従います。
 
 ## テスト
 
