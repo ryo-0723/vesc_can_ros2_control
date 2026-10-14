@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "vesc_can_driver/can_transport.hpp"
+#include "vesc_can_driver/vesc_driver.hpp"
 namespace vesc_can_driver
 {
 namespace

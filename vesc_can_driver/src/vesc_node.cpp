@@ -10,8 +10,8 @@
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/float64.hpp"
 #include "std_srvs/srv/set_bool.hpp"
-#include "vesc_can_driver/can_transport.hpp"
-#include "vesc_can_driver/motor_state_publisher.hpp"
+#include "vesc_can_driver/vesc_driver.hpp"
+#include "vesc_can_driver/vesc_state.hpp"
 
 namespace vesc_can_driver
 {
@@ -24,6 +24,7 @@ using SetBool = std_srvs::srv::SetBool;
 class VescNode : public rclcpp::Node
 {
 public:
+  /// @brief パラメータを読み込み、通信・指令受付・状態配信を起動する。
   VescNode() : rclcpp::Node("vesc_can_ros2_control")
   {
     TransportOptions opts;
@@ -52,6 +53,7 @@ public:
   }
 
 private:
+  /// @brief モータ名を接頭辞に持つ ROS パラメータから設定を読み込む。
   MotorConfig load_motor_config(const std::string &motor_name)
   {
     const auto prefix = motor_name + ".";
@@ -67,7 +69,8 @@ private:
     const auto default_interface =
       mode_name.empty() ? std::string("velocity")
                         : std::string(command_interface(parse_control_mode(mode_name)));
-    const auto cmd_interface = declare_parameter<std::string>(prefix + "command_interface", default_interface);
+    const auto cmd_interface =
+      declare_parameter<std::string>(prefix + "command_interface", default_interface);
     cfg.mode = resolve_control_mode(mode_name, cmd_interface);
     cfg.pole_pairs = declare_parameter<double>(prefix + "pole_pairs", 7.0);
     cfg.gear_ratio = declare_parameter<double>(prefix + "gear_ratio", 1.0);
@@ -94,6 +97,7 @@ private:
     return cfg;
   }
 
+  /// @brief 同じ namespace / context で通信ノードと専用 executor を起動する。
   void initialize_can_transport(const TransportOptions &opts)
   {
     auto node_opts = rclcpp::NodeOptions().use_global_arguments(false);
@@ -103,6 +107,7 @@ private:
     transport_->start();
   }
 
+  /// @brief モータ別指令・JointState 指令・enable サービスを登録する。
   void initialize_command_interfaces()
   {
     cmd_subs_.reserve(configs_.size());
@@ -121,6 +126,7 @@ private:
       });
   }
 
+  /// @brief VescState・JointState・診断の publisher と周期タイマーを作る。
   void initialize_state_publishers(std::chrono::milliseconds period)
   {
     state_pub_ = std::make_unique<MotorStatePublisher>(*this, configs_);
@@ -129,6 +135,8 @@ private:
     state_timer_ = create_wall_timer(period, [this]() { publish_states(); });
   }
 
+  /// @brief 関節名に対応する位置・速度指令を取り出し、最新指令へ渡す。
+  /// @note 電流指令はモータ別 Float64 トピックで受け付ける。
   void handle_joint_commands(const JointState &msg)
   {
     const auto joint_count = msg.name.size();
@@ -156,6 +164,7 @@ private:
     }
   }
 
+  /// @brief 有効化・無効化要求を処理し、自動有効化を解除する。
   void handle_enable_request(const SetBool::Request &request, SetBool::Response &response)
   {
     auto_enable_once_ = false;
@@ -173,6 +182,7 @@ private:
     }
   }
 
+  /// @brief 診断メッセージへキーと値を追加する。
   static void add_diagnostic_value(
     DiagnosticStatus &msg, const std::string &key, const std::string &value)
   {
@@ -182,6 +192,7 @@ private:
     msg.values.push_back(field);
   }
 
+  /// @brief 準備・動作許可・異常と STATUS の鮮度を診断メッセージにまとめる。
   DiagnosticStatus make_diagnostic_status(const MotorConfig &cfg, const MotorState &state,
     TimePoint steady_now, bool ready, bool enabled, bool faulted,
     const std::string &fault_reason) const
@@ -230,6 +241,8 @@ private:
     return msg;
   }
 
+  /// @brief 最新状態を取得し、VescState・JointState・診断を周期配信する。
+  /// @note auto_enable_once が有効なら初回の準備完了時だけ有効化する。
   void publish_states()
   {
     if (auto_enable_once_ && transport_->enable()) {
@@ -276,6 +289,8 @@ private:
 };
 }  // namespace vesc_can_driver
 
+/// @brief 通常ノードを起動し、終了時に ROS を停止する。
+/// @return 正常終了で 0、ノード実行中の例外で 1。
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);

@@ -13,10 +13,8 @@ VESC のネイティブ CAN フレームを encode/decode するライブラリ�
 | CMake target | ヘッダ | 役割 |
 |---|---|---|
 | vesc_can_driver::protocol | vesc_can_driver/vesc_protocol.hpp | SET_RPM / SET_CURRENT / SET_POS の encode、STATUS1〜6 の decode |
-| vesc_can_driver::core | vesc_can_driver/driver_core.hpp | 関節単位への変換、複数台の状態、範囲・鮮度・停止の管理 |
-| vesc_can_driver::transport | vesc_can_driver/can_transport.hpp | CAN トピックの送受信、専用 executor と指令 mailbox |
-| vesc_can_driver::state_conversion | vesc_can_driver/vesc_state_conversion.hpp | 受信した状態を vesc_msgs に変換 |
-| vesc_can_driver::state_publisher | vesc_can_driver/motor_state_publisher.hpp | モータごとの VescStateStamped 配信を通常ノードと hardware plugin で共用 |
+| vesc_can_driver::driver | vesc_can_driver/vesc_driver.hpp | モータ設定・状態、4 モードの制御、CAN の周期送受信、専用 executor と最新指令の受け渡し |
+| vesc_can_driver::state | vesc_can_driver/vesc_state.hpp | VescState への変換とモータごとの VescStateStamped 配信を両入口で共用 |
 
 encode/decode だけを使う場合は protocol target にリンクします。このライブラリは
 ROS ノードや executor を起動せず、rclcpp や hardware_interface にリンクしません。
@@ -42,6 +40,12 @@ if (vesc_can_driver::protocol::decode_status_1(received_frame, status)) {
 指令の broadcast ID や表現範囲外の値は例外になります。
 ライブラリと型の C++ namespace は `vesc_can_driver`、パケット関数は `vesc_can_driver::protocol` です。
 フレーム送信と制御周期は呼び出し側が管理します。
+
+`ready` / `enable` はパケット処理には不要です。`DriverCore` も有効化せずに STATUS を
+受信できます。動作の許可・指令期限・全台停止は `vesc_driver` 内で管理します。
+通常ノードと hardware plugin は同じ `CanTransport` と `MotorStatePublisher` を使います。
+直接 C++ API を使う場合の分担と移行方法は
+[ソースの構成](../docs/source-layout.md#ready--enable-とパケット処理の違い) を参照してください。
 
 ## 通常ノード
 

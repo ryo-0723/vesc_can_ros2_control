@@ -15,7 +15,6 @@ from launch_ros.actions import Node
 import launch_testing
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
-from rclpy.time import Time
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Float64MultiArray
 from std_srvs.srv import SetBool
@@ -113,9 +112,7 @@ class IntegrationTest(unittest.TestCase):
         self.node.destroy_node()
 
     def observe_frame(self, msg):
-        self.frame_times.setdefault(msg.id & 255, []).append(
-            Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
-        )
+        self.frame_times.setdefault(msg.id & 255, []).append(time.monotonic())
         self.frames[msg.id & 255] = (
             msg.id >> 8,
             int.from_bytes(bytes(msg.data[:4]), "big", signed=True),
@@ -124,25 +121,26 @@ class IntegrationTest(unittest.TestCase):
 
     def observe_joints(self, msg):
         self.joints = msg
-        self.joint_times.append(Time.from_msg(msg.header.stamp).nanoseconds * 1e-9)
+        self.joint_times.append(time.monotonic())
 
     def observe_vesc_state(self, msg):
         self.vesc_states[msg.state.controller_id] = msg.state
-        self.vesc_times.setdefault(msg.state.controller_id, []).append(
-            Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
-        )
+        self.vesc_times.setdefault(msg.state.controller_id, []).append(time.monotonic())
 
     def measure_rates(self, action):
-        self.frame_times.clear()
-        self.joint_times.clear()
-        self.vesc_times.clear()
-        deadline = time.monotonic() + 1.0
         next_cmd = time.monotonic()
-        while time.monotonic() < deadline:
-            if time.monotonic() >= next_cmd:
-                action()  # Commands at 25 Hz; CAN output remains independently periodic at 100 Hz.
-                next_cmd = time.monotonic() + 0.04
-            rclpy.spin_once(self.node, timeout_sec=0.005)
+        # Drain queued callbacks first, then measure one second with a monotonic clock.
+        # ROS header stamps may jump when the system/ROS clock changes.
+        for duration in (0.25, 1.0):
+            self.frame_times.clear()
+            self.joint_times.clear()
+            self.vesc_times.clear()
+            deadline = time.monotonic() + duration
+            while time.monotonic() < deadline:
+                if time.monotonic() >= next_cmd:
+                    action()  # 25 Hz input; CAN output remains independently periodic at 100 Hz.
+                    next_cmd = time.monotonic() + 0.04
+                rclpy.spin_once(self.node, timeout_sec=0.005)
 
     def assert_rate(self, samples, expected, label):
         self.assertGreaterEqual(len(samples), int(expected * 0.5))

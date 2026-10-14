@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "gtest/gtest.h"
-#include "vesc_can_driver/driver_core.hpp"
+#include "vesc_can_driver/vesc_driver.hpp"
 namespace vesc_can_driver
 {
 namespace
@@ -266,7 +266,6 @@ TEST(Core, ConvertsJointUnitsAndUsesMeasuredTachometer)
   EXPECT_NEAR(vel_to_erpm(cfg, kPi), -420.0, 1e-9);
   DriverCore core({cfg});
   const auto start_time = TimePoint(1s);
-  EXPECT_FALSE(core.enable(start_time));
   ASSERT_TRUE(core.receive(make_status_1_frame(), start_time));
   EXPECT_NEAR(core.states()[0].vel_rad_s, -kPi, 1e-9);
   ASSERT_TRUE(core.receive(make_status_5_frame(), start_time));
@@ -277,6 +276,33 @@ TEST(Core, ConvertsJointUnitsAndUsesMeasuredTachometer)
   EXPECT_NEAR(pos_to_deg(cfg, kPi / 4), 0.0, 1e-9);
   EXPECT_NEAR(deg_to_pos(cfg, 0.0), kPi / 4, 1e-9);
 }
+
+TEST(Core, ReceivesStatusWhileControlIsDisabledOrFaulted)
+{
+  auto cfg = make_motor_config();
+  cfg.mode = ControlMode::Current;
+  DriverCore core({cfg});
+  const auto start = TimePoint(1s);
+  EXPECT_FALSE(core.enabled());
+  ASSERT_TRUE(core.receive(make_status_1_frame(), start));
+  EXPECT_DOUBLE_EQ(core.states()[0].motor_current_a, 1.5);
+  ASSERT_TRUE(core.enable(start));
+  EXPECT_FALSE(core.set_command(0, kUnknownValue, start));
+  ASSERT_TRUE(core.faulted());
+
+  auto feedback = make_status_1_frame();
+  feedback.data = {255, 255, 254, 92, 0, 25, 0, 0};  // -420 ERPM, 2.5 A.
+  ASSERT_TRUE(core.receive(feedback, start + 1ms));
+  ASSERT_TRUE(core.receive(make_status_5_frame(), start + 1ms));
+  EXPECT_DOUBLE_EQ(core.states()[0].electrical_rpm, -420.0);
+  EXPECT_DOUBLE_EQ(core.states()[0].motor_current_a, 2.5);
+  EXPECT_DOUBLE_EQ(core.states()[0].input_voltage_v, 24.0);
+  EXPECT_EQ(core.states()[0].status1_at, start + 1ms);
+  EXPECT_TRUE(core.ready(start + 1ms));
+  EXPECT_TRUE(core.faulted());
+  EXPECT_FALSE(core.enabled());  // New feedback must not resume motion automatically.
+}
+
 TEST(Core, MultiMotorFeedbackAndCommandTimeoutLatchStopUntilExplicitEnable)
 {
   DriverCore core({make_motor_config(11), make_motor_config(12)});

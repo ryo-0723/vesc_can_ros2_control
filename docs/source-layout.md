@@ -1,146 +1,106 @@
 # ソースの構成
 
-公開用のソースは 3 つの ROS パッケージに分かれています。ワークスペースの
-`src` にリポジトリを配置すると、その下の各 `package.xml` が検出されます。
-リポジトリ直下には `src` はなく、各パッケージの `src` が実装を持ちます。
+ドライバ本体は、プロトコル・CAN 管理・通常ノード・共通状態出力の 4 単位です。
+通常ノードと ros2_control は同じ CAN 管理と状態出力を使います。
 
-| ファイル | 役割 | 使用先 |
+| ファイル | 役割 | 利用先 |
 |---|---|---|
-| `vesc_can_driver/src/vesc_protocol.cpp` | CAN 指令の encode と STATUS1〜6 の decode | `vesc_can_driver::protocol` |
-| `vesc_can_driver/src/driver_core.cpp` | 関節単位変換、制御モード、範囲・期限の検査、全台停止 | `vesc_can_driver::core` |
-| `vesc_can_driver/src/can_transport.cpp` | ROS の CAN トピックと専用 executor、指令の受け渡し | `vesc_can_driver::transport` |
-| `vesc_can_driver/src/vesc_state_conversion.cpp` | 受信した生値から `vesc_msgs` への変換 | `vesc_can_driver::state_conversion` |
-| `vesc_can_driver/src/motor_state_publisher.cpp` | モータごとの ROS 状態トピックを作成・配信 | `vesc_can_driver::state_publisher` |
-| `vesc_can_driver/src/vesc_node.cpp` | トピック・サービスで動かす通常ノード | `vesc_node` |
-| `vesc_can_ros2_control/src/vesc_system.cpp` | ros2_control の設定、lifecycle、read/write | `vesc_hardware` |
-| `vesc_can_driver/test/support/fake_vesc_node.cpp` | CAN 指令に応答する模擬 VESC | `fake_vesc_node`、デモと統合テスト |
+| `vesc_can_driver/src/vesc_protocol.cpp` | VESC 6 の CAN ID・ペイロード形式、指令の encode、STATUS1〜6 の decode | `vesc_can_driver::protocol` |
+| `vesc_can_driver/src/vesc_driver.cpp` | モータ設定、単位変換、状態更新、4 モードの指令、CAN の周期送受信・停止管理 | `vesc_can_driver::driver` |
+| `vesc_can_driver/src/vesc_node.cpp` | 通常ノードのパラメータ、指令トピック、有効化サービス、関節状態と診断 | `vesc_node` |
+| `vesc_can_driver/src/vesc_state.cpp` | VescState への変換とモータごとの VescStateStamped 配信 | `vesc_can_driver::state` |
+| `vesc_can_ros2_control/src/vesc_system.cpp` | ros2_control の設定、lifecycle、state / command interface の受け渡し | `vesc_hardware` |
 
-現在の `src` に未使用の `.cpp` はありません。protocol、core、transport、state_conversion、state_publisher は
-別々のライブラリで、単独利用と通常ノード・hardware plugin 間の共通化に使います。
-通常ノードは controller_manager を使わない利用者向けの入口です。
-4 モードの選択・指令範囲の検査・電流と速度の送信処理は `driver_core.cpp` に集約し、
-通常ノードと hardware plugin が共用します。
+公開ヘッダは `vesc_protocol.hpp`、`vesc_driver.hpp`、`vesc_state.hpp` の 3 個です。
+通常ノードは実行ファイルなので公開ヘッダを持ちません。
+`vesc_system.hpp` は別パッケージの hardware plugin のヘッダです。
 
-## ファイルを分ける基準
+## 共用する範囲
 
-現在の分割は責務と依存関係に沿っています。`vesc_protocol` は CAN の形式だけを扱い、
-`driver_core` はモータの設定・状態・4 モードの制御判断をまとめます。
-`can_transport` はその共通ロジックへ ROS の通信と executor を接続し、
-`vesc_node` と `vesc_system` はそれぞれ通常ノードと ros2_control の入口になります。
-設定の読み込みは YAML と URDF で入口が異なりますが、範囲検査と制御判断は共用します。
+`vesc_driver.hpp/.cpp` に `MotorConfig`、`MotorState`、共通の変換・検査、
+`DriverCore`、`CanTransport` をまとめています。
+`DriverCore` は状態更新とモードごとの制御判断、`CanTransport` は ROS の CAN トピック、
+専用 executor、最新指令の受け渡し、周期送信を担当します。
+通常ノードと hardware plugin はどちらも `CanTransport` を使います。
 
-`vesc_state_conversion` を独立させることで、上流 `vesc_msgs` への変換を
-制御ロジックから切り離して検証できます。変換処理は小さいものの、独立した役割があります。
-通常ノードと hardware plugin は `MotorStatePublisher` からこの変換を利用します。
-状態トピックの作成と配信を共用し、hardware read/write に ROS 配信を持ち込みません。
-今回はこの分割を維持し、モードごとにファイルを増やしてはいません。
+`vesc_state.hpp/.cpp` は `make_vesc_state()` と `MotorStatePublisher` を持ち、
+通常ノードと hardware plugin が同じ項目・単位・未取得値の扱いで状態を配信します。
+ros2_control の read/write には ROS 配信を入れません。
+`vesc_system` は通常ノードを使わず、共通の driver / state ライブラリへ接続します。
 
-## driver_core の命名と関数の分担
+`vesc_protocol` は形式の処理だけを扱い、ROS ノードや executor を起動しません。
+protocol target は rclcpp / hardware_interface へリンクしません。
+driver target は CAN 通信のため rclcpp を使いますが、ros2_control への依存はありません。
 
-局所変数には `cfg`（設定）、`state`（状態）、`cmd`（指令）、`idx`（添字）、
-`pos`（位置）、`vel`（速度）を使います。型と関数の文脈で分かる `motor_` / `joint_` の
-重複を減らし、物理量の単位は名前または構造体のコメントで明記します。
-`MotorState::pos_rad` / `vel_rad_s` は関節へ変換済みの値、
-`electrical_rpm` / `motor_current_a` / `pid_pos_deg` は VESC の生値です。
-protocol 側のフィールド名とデコード処理は維持しています。
+## vesc_driver の構成と関数
 
-| 対象 | 整理前 | 現在 |
-|---|---|---|
-| MotorConfig | `control_mode` | `mode` |
-| MotorConfig | `max_joint_velocity_rad_s` | `max_vel_rad_s` |
-| MotorConfig | `joint_velocity_slew_rate_rad_s2` | `vel_slew_rad_s2` |
-| MotorConfig | `min_joint_position_rad` / `max_joint_position_rad` | `min_pos_rad` / `max_pos_rad` |
-| MotorConfig | `rpm_control_threshold_rpm` | `rpm_threshold`（モータの機械 RPM） |
-| MotorState | `joint_position_rad` / `joint_velocity_rad_s` | `pos_rad` / `vel_rad_s` |
-| MotorState | `motor_pid_position_deg` | `pid_pos_deg` |
-| MotorState | `has_status_1` と `status_1_received_at` | `status1_at`（2〜6 も同様） |
-| DriverCore 内の指令 | `has_command` と `received_at` | `received_at` |
+`vesc_driver.cpp` は次の順に並べています。
 
-受信時刻は `std::optional<TimePoint>` にまとめました。未受信は `nullopt`、
-受信済みはその時刻を持ちます。これによりフラグと時刻の更新が一箇所になり、
-`TimePoint{}` で受信した場合も未受信と混同しません。
-`feedback_fresh()` は未受信・未来の時刻・期限切れを検査し、期限ちょうどは有効です。
+1. モードの選択と単位変換。
+2. 設定・指令範囲・フィードバック鮮度の検査。
+3. STATUS1〜6 の受信と状態更新。
+4. 有効化・停止・指令期限と 4 モードのフレーム生成。
+5. ROS の CAN 通信、指令の受け渡し、周期送信。
 
-| 関数 | 役割 |
-|---|---|
-| `parse_control_mode` / `command_interface` / `resolve_control_mode` | モード名の解釈、interface の対応、両者の整合性検査 |
-| `vel_to_erpm` / `erpm_to_vel`、`pos_to_deg` / `deg_to_pos` | 関節単位と VESC 単位の変換 |
-| `apply_direction` | 電流の符号変換。`direction` が ±1 なので両方向で共用 |
-| `validate_configs` | モータ一覧の存在・名前と ID の重複検査。各モータの範囲・単位・時間の検査は内部 `validate_config` に委譲 |
-| `state_ready` / `command_is_valid` | モードごとの必要なフィードバックと指令範囲の検査 |
-| `check_commands`（内部） | 全台のフィードバックと指令期限を指令生成前に検査 |
-| `make_cmd`（内部） | 4 モードの指令生成へ振り分け |
-| `make_current_cmd` / `make_velocity_cmd`（内部） | 電流指令と速度のランプを共用 |
-| `make_hybrid_cmd`（内部） | 電流起動から速度制御への移行 |
-| `disable` / `stop_on_error` | 指令状態の初期化を共用し、異常停止は理由とラッチを保持 |
+4 モードは `DriverCore::make_frame()` の一つの分岐で扱います。
+電流起動後は速度モードと同じ速度ランプへ進み、電流モード・電流起動・停止は
+内部の `make_current_frame()` を共用します。全台の事前検査は `check_commands()`、
+送信時刻の付与と停止要求の反映は `CanTransport::publish_frames()` が担当します。
 
-通常ノードの起動時の設定検査は `DriverCore` のコンストラクタに集約しました。
-ros2_control は configure 前に設定を検査する必要があるため、on_init でも共通検査を呼びます。
-浮動小数点の NaN、CAN 指令の整数範囲、単回転の位置範囲、フィードバック・指令・起動の
-期限検査は、4 モードの動作に必要な検査として維持しています。
+## ready / enable とパケット処理の違い
 
-C++ の公開ヘッダを直接使う利用者はメンバ名・関数名と受信時刻の参照の更新が必要です。
-ROS トピック・サービス・パラメータ、URDF の interface 名、上流メッセージの項目名は維持します。
-例えば URDF の `max_velocity` は引き続き受け付け、内部の `max_vel_rad_s` へ読み込みます。
+`ready()` と `enable()` は PC 側の制御管理で、VESC に送る CAN コマンドではありません。
+`ready()` は全モータの必要な STATUS が新鮮で、位置モードなら位置が範囲内かを確認します。
+`enable()` は動作指令を許可し、異常と以前の指令をリセットします。
+通常ノードの enable サービスと ros2_control の activate が使います。
+
+パケットの作成・デコードだけなら `vesc_protocol` を直接使い、ready / enable は不要です。
+`DriverCore::receive()` も有効化を要求せず、無効・異常停止中にも状態を更新します。
+通信断・指令期限切れ・不正指令・電流起動失敗は全台のゼロ電流送信に切り替え、
+明示的な再有効化まで動作を再開しません。
+
+このドライバの動作指令は SET_CURRENT / SET_RPM / SET_POS の 3 種類です。
+`current_velocity` は SET_CURRENT で起動して SET_RPM へ移るホスト側の制御モードです。
 
 ## 通信・ROS・起動設定の変数名
 
-他のファイルも `cfg` / `state` / `cmd` の方針に揃えました。通信設定には `opts`、
-ROS メッセージには `msg`、publisher / subscription には `pub` / `sub`、
-パラメータには `params`、添字には `motor_idx` / `joint_idx` を使います。
-配列を持つメンバは `configs_` / `states_` / `cmds_`、送受信は `tx` / `rx` で表します。
-mutex と停止・異常フラグは、同期やラッチの意味が分かる名前を使います。
+局所変数は `cfg`（設定）、`opts`（通信設定）、`state`（状態）、`cmd`（指令）、
+`idx`（添字）、`pos`（位置）、`vel`（速度）を使い、物理量の単位を名前に残します。
+`MotorState::pos_rad` / `vel_rad_s` は関節へ変換済みの値、
+`electrical_rpm` / `motor_current_a` / `pid_pos_deg` は VESC の生値です。
 
-| 整理前 | 現在 | 意味 |
-|---|---|---|
-| `motor_config` / `transport_options` | `cfg` / `opts` | モータ設定 / 通信設定 |
-| `can_tx_publisher_` / `can_rx_subscription_` | `tx_pub_` / `rx_sub_` | CAN 指令の配信 / 状態の受信 |
-| `pending_commands_` / `command_frames_` | `pending_cmds_` / `cmd_frames_` | 未処理の指令 / 送信する CAN フレーム |
-| `motor_command_subscriptions_` / `motor_state_publishers_` | `cmd_subs_` / `state_pubs_` | モータごとの指令購読 / 状態配信 |
-| `hardware_parameters` / `hardware_info`（局所変数） | `hw_params` / `hw_info` | ros2_control の設定 / hardware 情報 |
-| `robot_description_tree` / `can_topic_parameters` | `urdf_tree` / `mock_params` | URDF の木 / 模擬ノードの設定 |
-| `package_share_dir` | `pkg_dir` | 起動するパッケージの share ディレクトリ |
+STATUS と指令の受信時刻は `std::optional<TimePoint>` です。
+未受信は `nullopt` とし、時刻ゼロでの受信と区別します。
+`steady_now` は期限判定、`stamp` はメッセージに付ける ROS 時刻です。
+ROS 設定キー、トピック名、interface 名、上流メッセージの項目名は維持しています。
 
-通常ノードでは `steady_now` を期限判定用の steady clock、`stamp` をメッセージに付ける
-ROS 時刻に使います。模擬ノードの `pos_rad` はモータ角度 [rad] で、
-`MotorState::pos_rad` は関節角度 [rad] です。それぞれの型と変換箇所で区別します。
-Python のテストでも `vel_pub` / `pos_pub` / `current_pub` / `hybrid_pub` を使い、
-指令値と publisher を区別します。
+## 周期と終了処理
 
-公開 C++ 構造体 `TransportOptions` の `can_tx_topic` / `can_rx_topic` は
-`tx_topic` / `rx_topic` に短縮しました。直接使う C++ コードはメンバ参照の更新が必要です。
-ROS 設定のキーは引き続き `can_tx_topic` / `can_rx_topic`、送信周期の C++ メンバは `send_period` です。
-設定キー、トピック名、標準・上流メッセージの項目名は維持しています。
-
-## 周期送信と終了処理の分担
-
-CAN 指令は各モータ 100 Hz、通常ノードと ros2_control の ROS 状態トピックは 50 Hz です。
+CAN 指令は各モータ 100 Hz、通常ノードと ros2_control の
+JointState / VescStateStamped は 50 Hz です。
 ros2_control の state interface は controller_manager の 100 Hz で更新します。
-既定値と同梱設定を揃え、CAN の周期と ROS 状態の周期は独立したタイマーで扱います。
+CAN と ROS 状態は独立したタイマーで扱い、モータごとのスレッドは追加しません。
 
-`CanTransport::send_commands()` は最新指令と状態を検査してフレームを作り、
-`publish_frames()` は停止要求の反映・時刻の付与・送信を担当します。
-終了時も後者を共用し、送信済みフレーム用のバッファを再利用します。
-未処理の指令は optional の受信時刻で表し、停止中に同じ指令配列を毎周期初期化する処理を除きました。
+`CanTransport::shutdown()` は専用 executor を停止して join した後に停止指令を送ります。
+hardware plugin はその後に状態タイマーと publisher を破棄します。
 
-通常ノードの `stop()` ラッパーは削除し、`CanTransport` のデストラクタで停止・join を行います。
-hardware plugin は状態タイマーも持つため、transport の停止・join の後にタイマーと publisher を破棄します。
-ROS が呼ぶ lifecycle callback と、安全検査・状態取得・単位変換に必要な関数は維持しています。
-模擬ノードの STATUS 作成は DLC=8 に統一し、常に 8 を渡す引数を削除しました。
+## C++ 利用側の更新
 
-## 起動例とテスト用ファイル
+共通型・制御・通信は `vesc_driver.hpp`、VescState の変換・配信は `vesc_state.hpp` を include します。
+旧 core / transport target は `vesc_can_driver::driver`、
+旧 state_conversion / state_publisher target は `vesc_can_driver::state` に統合しました。
+`MotorControl` の処理は `DriverCore` に統合しています。
+`CanTransport` と `MotorStatePublisher` の公開メソッドはそのまま使えます。
 
-模擬ノードは実機用実装と区別するため `src` から `test/support` へ移しました。
-`use_mock:=true` と統合テストが利用するため削除していません。
-デモを利用できるよう、`BUILD_TESTING=OFF` でもビルド・インストールします。
+## テスト・設定・ライセンス
 
-`vesc_can_driver/test` はプロトコル・共通ドライバ・通信・状態メッセージ変換のテスト、
-`vesc_can_ros2_control/test` は設定と実プロセスを起動する統合テストです。
+模擬 VESC は `test/support/fake_vesc_node.cpp` に置き、`use_mock:=true` と統合テストで使います。
+デモ用に `BUILD_TESTING=OFF` でもインストールします。
+ドライバのテストはプロトコル、制御、通信、状態変換を検査し、
+ros2_control 側のテストは hardware 設定と両入口の統合動作を検査します。
+
 `config`、`launch`、`urdf` はインストール後の起動例に必要です。
-`vesc_msgs` は `VescState.msg` と `VescStateStamped.msg` の 2 個と、それを生成する
-ローカルの CMake / package.xml、BSD ライセンス・出典を持ちます。IMU は含めません。
-ライセンス原本はルートの MIT と `vesc_msgs/LICENSE` の BSD の計 2 個です。
-ドライバの各パッケージにはルートの MIT 原本をインストールします。
-
-ビルド出力の `build`、`install`、`log` と Python キャッシュは `.gitignore` で除外します。
-ソース配布時には含めません。
+`vesc_msgs` は F1TENTH 由来の VescState / VescStateStamped の 2 定義で、IMU は含めません。
+ライセンス原本はルートの MIT と `vesc_msgs/LICENSE` の BSD の 2 個です。
+各ドライバパッケージにはルートの MIT 原本をインストールします。
+ビルド出力と Python キャッシュは `.gitignore` で除外します。

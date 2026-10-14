@@ -16,6 +16,7 @@ namespace
 {
 using Parameters = std::unordered_map<std::string, std::string>;
 
+/// @brief 文字列パラメータを取得し、未指定なら既定値を返す。
 std::string get_string_parameter(
   const Parameters &params, const std::string &name, const std::string &default_value)
 {
@@ -23,6 +24,7 @@ std::string get_string_parameter(
   return param_it == params.end() ? default_value : param_it->second;
 }
 
+/// @brief 数値パラメータを取得し、有限性と文字列全体の変換を検査する。
 double get_numeric_parameter(
   const Parameters &params, const std::string &name, double default_value)
 {
@@ -39,6 +41,7 @@ double get_numeric_parameter(
   return value;
 }
 
+/// @brief 非負整数パラメータを取得し、整数性と許容範囲を検査する。
 int get_integer_parameter(const Parameters &params, const std::string &name, int default_value)
 {
   constexpr int kMaxIntegerParameter = 1'000'000;

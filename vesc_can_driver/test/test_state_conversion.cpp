@@ -2,7 +2,8 @@
 #include <cmath>
 
 #include "gtest/gtest.h"
-#include "vesc_can_driver/vesc_state_conversion.hpp"
+#include "vesc_can_driver/vesc_driver.hpp"
+#include "vesc_can_driver/vesc_state.hpp"
 
 namespace vesc_can_driver
 {
@@ -93,7 +94,8 @@ TEST(StateConversion, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForCo
   const auto received_at = TimePoint(1s);
   const auto rpm_frame = status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244});
   ASSERT_TRUE(core.receive(rpm_frame, received_at));
-  EXPECT_TRUE(core.ready(received_at));  // STATUS2/3/6 are optional telemetry.
+  EXPECT_TRUE(
+    state_ready(cfg, core.states().front(), received_at));  // STATUS2/3/6 are optional telemetry.
   receive_all_statuses(core, received_at);
   const auto steady_now = received_at + 201ms;
   ASSERT_TRUE(core.receive(rpm_frame, steady_now));

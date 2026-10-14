@@ -166,7 +166,7 @@ Lyrical で全 3 パッケージを再ビルドし、既存の **35 ケースが
 
 関節の位置・速度と VESC の生値を変数名で区別し、単位、STATUS の受信済みフラグと
 受信時刻、CAN の送受信方向を明記しました。変更一覧と C++ 利用者向けの更新点は
-[ソースの構成](source-layout.md#driver_core-の命名と関数の分担) に記載しています。
+[ソースの構成](source-layout.md#vesc_driver-の構成と関数) に記載しています。
 ROS パラメータ、トピック、interface、メッセージ項目名は維持しています。
 
 変更前のコピーと照合し、C++ 16 ファイルの文字列・数値・演算子が同じであることを
@@ -255,3 +255,68 @@ controller_manager の実パラメータが `update_rate=100` であることも
 ドライバ単体と hardware plugin のビルド、新しい state_publisher target の外部 CMake 利用、
 clang-format、Black、`git diff --check` も成功しています。
 上表は模擬環境での ROS メッセージの実測で、実 CAN バスや Zenoh pico 経路の測定ではありません。
+
+## STATUS 受信と制御管理の分離後の検証
+
+2026-10-14、`driver_core.cpp` を STATUS1〜6 の受信と状態更新に絞り、
+設定・状態の型と共通変換・検査を `motor_types`、有効化・期限検査・停止と
+4 モードの指令生成を `MotorControl` に分けました。
+電流・速度・位置・電流＋速度の処理は `make_frame()` の一つの分岐で扱い、
+電流起動後の速度ランプを速度モードと共用します。
+公開 CMake target は引き続き `vesc_can_driver::core` です。
+
+`vesc_protocol.hpp/.cpp` は編集前とバイト単位で一致しています。
+STATUS の受信関数と、共通変換・設定検査の関数群も移動前と一致することを確認しました。
+DriverCore は制御の無効・異常停止中でも状態を受信し、フィードバックの復旧だけでは
+動作を再開しないことを確認するテストを追加しました。
+
+ドライバ単体と ros2_control plugin を Lyrical でビルドし、元の 39 ケースと追加 1 ケースを
+合わせた **40 ケースが成功**しました。`colcon test-result` は
+`45 tests, 0 errors, 0 failures, 0 skipped` です。
+4 モードの指令、速度ランプ、電流起動・反転、指令・フィードバック・起動のタイムアウト、
+全台停止と明示的な復帰を確認しています。
+統合テストの実測は ros2_control の 4 台と通常ノードの 2 台とも
+CAN 指令 100.0 Hz、VescStateStamped 50.0 Hz、JointState 50.0 Hz でした。
+
+インストール済みパッケージを外部 CMake から利用するビルド・実行も成功しました。
+全公開 target を利用する例に加え、core target だけにリンクして ROS ノードを起動せずに
+`DriverCore` と `MotorControl` を利用する例を確認しています。
+パッケージ・実行ファイル・launch の解決、全 C++ の clang-format と
+`git diff --check` も成功しています。実機の CAN バス・モータ・Zenoh pico は未検証です。
+
+## ドライバ本体を 4 単位に統合した後の検証
+
+2026-10-14、ドライバ本体の実装を `vesc_protocol.cpp`、`vesc_driver.cpp`、
+`vesc_node.cpp`、`vesc_state.cpp` の 4 ファイルへ統合しました。
+公開ヘッダは protocol / driver / state の 3 個、公開ライブラリも
+`vesc_can_driver::protocol` / `::driver` / `::state` の 3 個です。
+ros2_control の `vesc_system` は別パッケージに残し、通常ノードと共通の driver / state を使います。
+
+設定・状態の型と共通関数、STATUS 受信、4 モードの制御、ROS の CAN 送受信は
+`vesc_driver` にまとめました。`MotorControl` は `DriverCore` に統合し、
+状態を別オブジェクトから参照する構成を解消しています。
+VescState の変換と配信は `vesc_state` にまとめました。
+旧ヘッダと旧ライブラリ target は新しい構成へ置き換えています。
+
+protocol の 2 ファイルは統合前とバイト単位で一致しています。
+移動した変換・検査・STATUS 受信・指令生成・通信・状態配信の関数も、
+統合に伴う参照名・クラス名と整形以外の処理が一致することを確認しました。
+Lyrical でドライバ単体と hardware plugin をビルドし、既存の **40 ケースが成功**しました。
+最終の `colcon test-result` は `45 tests, 0 errors, 0 failures, 0 skipped` です。
+
+周期テストでは、ROS の送信時刻が約 9.5 秒逆行するケースを観測しました。
+publisher の重複を除外しても発生したため、周期の測定は単調な受信時刻へ変更しました。
+開始前に 0.25 秒間キューを処理し、その後 1 秒間を測定します。
+指令入力の 25 Hz、必要サンプル数、期待周期の ±25% の判定は維持しています。
+ドライバが付ける ROS header stamp と、steady clock による制御期限の処理は変更していません。
+
+| 模擬構成 | CAN 受信（各モータ） | VescStateStamped 受信（各モータ） | JointState 受信 |
+|---|---|---|---|
+| ros2_control、4 モード混在 | 100.1 Hz（4 台とも） | 50.0 Hz（4 台とも） | 50.0 Hz |
+| 通常ノード、駆動・操舵 | 100.1 / 100.4 Hz | 50.0 Hz（2 台とも） | 50.0 Hz |
+
+外部 CMake から新しい 3 target を利用するビルド・実行と、
+driver target だけをリンクして DriverCore を利用する例も成功しました。
+パッケージ・実行ファイル・launch の解決、全 C++ の clang-format、
+Python の Black、`git diff --check` も成功しています。
+上表は ROS メッセージの受信周期で、実機 CAN バスや Zenoh pico の測定ではありません。

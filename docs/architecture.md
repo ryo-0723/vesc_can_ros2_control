@@ -5,14 +5,15 @@
 | パッケージ | 内容 | 他のパッケージとの関係 |
 |---|---|---|
 | vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC | vesc_msgs を使用。ros2_control への依存なし |
-| vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の transport / state_publisher を使用 |
+| vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の driver / state を使用 |
 | vesc_msgs | 上流由来の ROS メッセージ | 両ドライバとは独立したインターフェース定義 |
 
 `vesc_can_driver::protocol` は encode/decode だけの公開 CMake target です。
-共通の状態管理は `vesc_can_driver::core`、CAN トピック処理は `vesc_can_driver::transport`、
-vesc_msgs への変換は `vesc_can_driver::state_conversion` に分けてリンクできます。
-共通の ROS 状態配信は `vesc_can_driver::state_publisher` が担当します。
-protocol/core は ROS ノードを起動しません。
+`vesc_can_driver::driver` はモータ設定・単位変換・状態更新・4 モードの指令処理と
+CAN トピック通信をまとめます。`vesc_can_driver::state` は VescState の変換と配信です。
+通常ノードと hardware plugin は同じ driver / state をリンクします。
+protocol は rclcpp を使わず、driver / state は ROS 通信に rclcpp を使います。
+いずれも ros2_control には依存せず、hardware plugin が ros2_control の入口を担当します。
 パッケージを分割しても、ライブラリ間の呼び出しにトピック中継や追加スレッドは
 発生しません。実行時の CAN executor と mailbox の構成は以下のとおりです。
 
@@ -22,8 +23,9 @@ flowchart LR
   N[vesc_node: topic / service] --> M[latest command mailbox]
   H --> M
   M --> T[CanTransport: private executor thread]
-  T --> D[DriverCore: limits / conversions / state]
-  D --> F[can_msgs/msg/Frame]
+  T --> D[DriverCore: STATUS / modes / deadlines]
+  D --> P[vesc_protocol: encode / decode]
+  P --> F[can_msgs/msg/Frame]
   F --> Z[Zenoh pico gateway]
   Z --> B[physical CAN bus]
   B --> V[multiple VESCs]
@@ -33,6 +35,10 @@ flowchart LR
   T --> H
   T --> N
 ```
+
+`DriverCore::receive()` は制御の無効・異常停止中にも状態を更新します。
+`ready` / `enable` はドライバのホスト側の制御状態で、CAN 有効化パケットではありません。
+パケットの encode/decode は protocol を直接呼び出せます。
 
 通常ノードとプラグインはどちらかを選びます。同じ ID を両方から制御しません。
 VescSystem は実行ファイルではなく、controller_manager のプロセスへロードする

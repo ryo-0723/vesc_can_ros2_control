@@ -15,6 +15,7 @@ constexpr std::uint8_t kStatusPayloadSize = 8;
 constexpr double kCurrentCommandScale = 1000.0;
 constexpr double kPositionCommandScale = 1000000.0;
 
+/// @brief int32 ペイロードを big endian の拡張 CAN 指令へ格納する。
 can_msgs::msg::Frame make_command_frame(
   std::uint8_t controller_id, std::uint32_t packet_id, std::int32_t payload)
 {
@@ -34,6 +35,7 @@ can_msgs::msg::Frame make_command_frame(
   return frame;
 }
 
+/// @brief 指令値に倍率を掛け、範囲を検査して int32 に丸める。
 std::int32_t scale_command_value(double value, double scale)
 {
   const double scaled_value = value * scale;
@@ -44,12 +46,14 @@ std::int32_t scale_command_value(double value, double scale)
   return static_cast<std::int32_t>(std::llround(scaled_value));
 }
 
+/// @brief STATUS の種類・拡張 ID・DLC・データフレーム条件を検査する。
 bool is_valid_status_frame(const can_msgs::msg::Frame &frame, std::uint32_t packet_id)
 {
   return frame.is_extended && !frame.is_rtr && !frame.is_error && frame.id <= kExtendedCanIdMask &&
          frame.dlc == kStatusPayloadSize && (frame.id >> kPacketIdShift) == packet_id;
 }
 
+/// @brief 指定バイト位置から big endian の符号付き 32 bit 値を読む。
 std::int32_t read_signed_32(const can_msgs::msg::Frame &frame, std::size_t offset)
 {
   std::uint32_t payload_bits = 0;
@@ -59,6 +63,7 @@ std::int32_t read_signed_32(const can_msgs::msg::Frame &frame, std::size_t offse
   return std::bit_cast<std::int32_t>(payload_bits);
 }
 
+/// @brief 指定バイト位置から big endian の符号付き 16 bit 値を読む。
 std::int32_t read_signed_16(const can_msgs::msg::Frame &frame, std::size_t offset)
 {
   const auto payload_bits = static_cast<std::uint16_t>(

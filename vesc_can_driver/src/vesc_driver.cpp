@@ -1,4 +1,4 @@
-#include "vesc_can_driver/driver_core.hpp"
+#include "vesc_can_driver/vesc_driver.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +10,7 @@
 
 namespace vesc_can_driver
 {
+// Mode selection and unit conversion.
 ControlMode parse_control_mode(std::string_view mode_name)
 {
   if (mode_name == "current") {
@@ -83,8 +84,10 @@ double apply_direction(const MotorConfig &cfg, double current_a)
   return current_a * cfg.direction;
 }
 
+// Configuration validation.
 namespace
 {
+/// @brief 1 台の設定・時間・モード固有の指令範囲を検査する。
 void validate_config(const MotorConfig &cfg)
 {
   command_interface(cfg.mode);  // Reject invalid enum values as well.
@@ -146,6 +149,7 @@ void validate_configs(const std::vector<MotorConfig> &configs)
   }
 }
 
+// Shared feedback freshness and command limits.
 bool feedback_fresh(
   const std::optional<TimePoint> &received_at, TimePoint now, std::chrono::milliseconds timeout)
 {
@@ -186,8 +190,18 @@ bool state_ready(const MotorConfig &cfg, const MotorState &state, TimePoint now)
   return !cfg.require_tachometer || feedback_fresh(state.status5_at, now, timeout);
 }
 
+namespace
+{
+/// @brief 関節方向の電流 [A] を VESC 方向へ変換して指令フレームを作る。
+can_msgs::msg::Frame make_current_frame(const MotorConfig &cfg, double current_a)
+{
+  return protocol::make_set_current_frame(cfg.controller_id, apply_direction(cfg, current_a));
+}
+}  // namespace
+
+// STATUS reception and motor state.
 DriverCore::DriverCore(std::vector<MotorConfig> configs)
-  : configs_(std::move(configs)), states_(configs_.size()), commands_(configs_.size())
+  : configs_(std::move(configs)), states_(configs_.size()), cmds_(configs_.size())
 {
   validate_configs(configs_);
 }
@@ -251,6 +265,7 @@ bool DriverCore::receive(const can_msgs::msg::Frame &frame, TimePoint now)
   return true;
 }
 
+// Command activation, deadlines and four-mode frame generation.
 bool DriverCore::ready(TimePoint now) const
 {
   for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
@@ -270,14 +285,14 @@ bool DriverCore::enable(TimePoint now)
   faulted_ = false;
   fault_reason_.clear();
   enabled_at_ = now;
-  std::fill(commands_.begin(), commands_.end(), Command{});
+  std::fill(cmds_.begin(), cmds_.end(), Command{});
   return true;
 }
 
 void DriverCore::disable()
 {
   enabled_ = false;
-  std::fill(commands_.begin(), commands_.end(), Command{});
+  std::fill(cmds_.begin(), cmds_.end(), Command{});
 }
 
 void DriverCore::stop_on_error(const std::string &reason)
@@ -297,7 +312,7 @@ bool DriverCore::set_command(std::size_t idx, double value, TimePoint now)
     stop_on_error(cfg.name + ": invalid command");
     return false;
   }
-  auto &cmd = commands_[idx];
+  auto &cmd = cmds_[idx];
   if (cfg.mode == ControlMode::CurrentVelocity && (!cmd.received_at || cmd.target * value <= 0.0)) {
     cmd.rpm_control_active = false;
     cmd.startup_at = now;
@@ -313,8 +328,8 @@ bool DriverCore::set_command(std::size_t idx, double value, TimePoint now)
 void DriverCore::stop_frames(std::vector<can_msgs::msg::Frame> &frames) const
 {
   frames.clear();
-  for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
-    frames.push_back(make_current_cmd(idx, 0.0));
+  for (const auto &cfg : configs_) {
+    frames.push_back(make_current_frame(cfg, 0.0));
   }
 }
 
@@ -322,7 +337,7 @@ bool DriverCore::check_commands(TimePoint now)
 {
   for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
     const auto &cfg = configs_[idx];
-    const auto &cmd = commands_[idx];
+    const auto &cmd = cmds_[idx];
     if (!state_ready(cfg, states_[idx], now)) {
       stop_on_error(cfg.name + ": feedback stale or position outside limits");
       return false;
@@ -343,78 +358,265 @@ void DriverCore::command_frames(TimePoint now, std::vector<can_msgs::msg::Frame>
   }
   frames.clear();
   for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
-    const auto frame = make_cmd(idx, now);
+    const auto frame = make_frame(idx, now);
     if (!frame) {
       stop_frames(frames);
       return;
     }
     frames.push_back(*frame);
-    commands_[idx].ramp_at = now;
+    cmds_[idx].ramp_at = now;
   }
 }
 
-std::optional<can_msgs::msg::Frame> DriverCore::make_cmd(std::size_t idx, TimePoint now)
+std::optional<can_msgs::msg::Frame> DriverCore::make_frame(std::size_t idx, TimePoint now)
 {
   const auto &cfg = configs_[idx];
-  auto &cmd = commands_[idx];
+  auto &cmd = cmds_[idx];
   if (!cmd.received_at || (cfg.mode != ControlMode::Position && cmd.target == 0.0)) {
     cmd.ramp_vel = 0.0;
     cmd.rpm_control_active = false;
-    return make_current_cmd(idx, 0.0);
+    return make_current_frame(cfg, 0.0);
   }
   switch (cfg.mode) {
     case ControlMode::Current:
-      return make_current_cmd(idx, cmd.target);
-    case ControlMode::Velocity:
-      return make_velocity_cmd(idx, now);
+      return make_current_frame(cfg, cmd.target);
     case ControlMode::Position:
       return protocol::make_set_position_frame(cfg.controller_id, pos_to_deg(cfg, cmd.target));
-    case ControlMode::CurrentVelocity:
-      return make_hybrid_cmd(idx, now);
+    case ControlMode::CurrentVelocity: {
+      const auto &state = states_[idx];
+      const double rpm_per_vel = cfg.gear_ratio * 60.0 / (2.0 * kPi);
+      const double measured_rpm = std::abs(state.vel_rad_s) * rpm_per_vel;
+      const double target_rpm = std::abs(cmd.target) * rpm_per_vel;
+      const bool reached_threshold = cmd.target * state.vel_rad_s > 0.0 &&
+                                     measured_rpm >= std::min(target_rpm, cfg.rpm_threshold);
+      if (!cmd.rpm_control_active && reached_threshold) {
+        cmd.rpm_control_active = true;
+        cmd.ramp_vel = std::clamp(state.vel_rad_s, -cfg.max_vel_rad_s, cfg.max_vel_rad_s);
+      }
+      if (!cmd.rpm_control_active) {
+        if (now - cmd.startup_at > cfg.startup_timeout) {
+          stop_on_error(cfg.name + ": startup timeout");
+          return std::nullopt;
+        }
+        return make_current_frame(cfg, std::copysign(cfg.startup_current_a, cmd.target));
+      }
+      // Once startup finishes, use the same velocity ramp as direct velocity mode.
+      [[fallthrough]];
+    }
+    case ControlMode::Velocity: {
+      const double dt_s = std::max(0.0, std::chrono::duration<double>(now - cmd.ramp_at).count());
+      const double max_step = cfg.vel_slew_rad_s2 * dt_s;
+      cmd.ramp_vel += std::clamp(cmd.target - cmd.ramp_vel, -max_step, max_step);
+      const auto electrical_rpm =
+        static_cast<std::int32_t>(std::llround(vel_to_erpm(cfg, cmd.ramp_vel)));
+      return protocol::make_set_rpm_frame(cfg.controller_id, electrical_rpm);
+    }
   }
   stop_on_error(cfg.name + ": unsupported control mode");
   return std::nullopt;
 }
-
-can_msgs::msg::Frame DriverCore::make_current_cmd(std::size_t idx, double joint_current_a) const
+// ROS CAN transport: executor, latest commands and periodic transmission.
+CanTransport::CanTransport(
+  std::vector<MotorConfig> configs, TransportOptions opts, rclcpp::Node::SharedPtr can_node)
+  : core_(std::move(configs)), opts_(std::move(opts)), can_node_(std::move(can_node)),
+    pending_cmds_(core_.motor_configs().size())
 {
-  const auto &cfg = configs_[idx];
-  return protocol::make_set_current_frame(cfg.controller_id, apply_direction(cfg, joint_current_a));
+  if (!can_node_ || opts_.send_period.count() <= 0 || opts_.tx_topic.empty() ||
+      opts_.rx_topic.empty() || opts_.tx_topic == opts_.rx_topic) {
+    throw std::invalid_argument("Invalid CAN transport node, topics or period");
+  }
+
+  cmd_frames_.reserve(core_.motor_configs().size());
+  const auto tx_depth = std::max<std::size_t>(50, core_.motor_configs().size() * 4);
+  const auto tx_qos = rclcpp::QoS(tx_depth).reliable().durability_volatile();
+  tx_pub_ = can_node_->create_publisher<can_msgs::msg::Frame>(opts_.tx_topic, tx_qos);
+  rx_sub_ = can_node_->create_subscription<can_msgs::msg::Frame>(opts_.rx_topic,
+    rclcpp::SensorDataQoS().keep_last(512), [this](can_msgs::msg::Frame::ConstSharedPtr frame) {
+      {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        core_.receive(*frame, SteadyClock::now());
+      }
+      feedback_cv_.notify_all();
+    });
+  send_timer_ = can_node_->create_wall_timer(opts_.send_period, [this]() { send_commands(); });
+  can_exec_.add_node(can_node_);
 }
 
-std::optional<can_msgs::msg::Frame> DriverCore::make_hybrid_cmd(std::size_t idx, TimePoint now)
+CanTransport::~CanTransport()
 {
-  const auto &cfg = configs_[idx];
-  const auto &state = states_[idx];
-  auto &cmd = commands_[idx];
-  const double measured_rpm = std::abs(state.vel_rad_s) * cfg.gear_ratio * 60.0 / (2.0 * kPi);
-  const double target_rpm = std::abs(cmd.target) * cfg.gear_ratio * 60.0 / (2.0 * kPi);
-  const bool reached_threshold =
-    cmd.target * state.vel_rad_s > 0.0 && measured_rpm >= std::min(target_rpm, cfg.rpm_threshold);
+  shutdown();
+}
 
-  if (!cmd.rpm_control_active && reached_threshold) {
-    cmd.rpm_control_active = true;
-    cmd.ramp_vel = std::clamp(state.vel_rad_s, -cfg.max_vel_rad_s, cfg.max_vel_rad_s);
+void CanTransport::start()
+{
+  if (shutdown_started_.load()) {
+    throw std::logic_error("Transport has been shut down");
   }
-  if (!cmd.rpm_control_active) {
-    if (now - cmd.startup_at > cfg.startup_timeout) {
-      stop_on_error(cfg.name + ": startup timeout");
-      return std::nullopt;
+  if (exec_thread_.joinable()) {
+    throw std::logic_error("Transport already started");
+  }
+  exec_thread_ = std::thread([this]() {
+    try {
+      can_exec_.spin();
+    } catch (const std::exception &error) {
+      enabled_.store(false);
+      faulted_.store(true);
+      stop_requested_.store(true);
+      RCLCPP_ERROR(can_node_->get_logger(), "CAN executor failed: %s", error.what());
     }
-    return make_current_cmd(idx, std::copysign(cfg.startup_current_a, cmd.target));
-  }
-  return make_velocity_cmd(idx, now);
+  });
 }
 
-can_msgs::msg::Frame DriverCore::make_velocity_cmd(std::size_t idx, TimePoint now)
+void CanTransport::shutdown() noexcept
 {
-  const auto &cfg = configs_[idx];
-  auto &cmd = commands_[idx];
-  const double dt_s = std::max(0.0, std::chrono::duration<double>(now - cmd.ramp_at).count());
-  const double max_step = cfg.vel_slew_rad_s2 * dt_s;
-  cmd.ramp_vel += std::clamp(cmd.target - cmd.ramp_vel, -max_step, max_step);
-  const auto electrical_rpm =
-    static_cast<std::int32_t>(std::llround(vel_to_erpm(cfg, cmd.ramp_vel)));
-  return protocol::make_set_rpm_frame(cfg.controller_id, electrical_rpm);
+  if (shutdown_started_.exchange(true)) {
+    return;
+  }
+  stop_requested_.store(true);
+  enabled_.store(false);
+  can_exec_.cancel();
+  if (exec_thread_.joinable()) {
+    exec_thread_.join();
+  }
+  try {
+    if (rclcpp::ok(can_node_->get_node_base_interface()->get_context())) {
+      core_.stop_frames(cmd_frames_);
+      publish_frames();
+    }
+  } catch (const std::exception &) {
+    // Destruction cannot guarantee network delivery; MCU/VESC watchdogs remain necessary.
+  }
+  feedback_cv_.notify_all();
+}
+
+bool CanTransport::wait_ready(std::chrono::milliseconds timeout)
+{
+  std::unique_lock<std::mutex> state_lock(state_mutex_);
+  const bool condition_met = feedback_cv_.wait_for(state_lock, timeout,
+    [this]() { return shutdown_started_.load() || core_.ready(SteadyClock::now()); });
+  return condition_met && !shutdown_started_.load();
+}
+
+bool CanTransport::enable()
+{
+  if (shutdown_started_.load()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+  const bool enabled = core_.enable(SteadyClock::now());
+  fault_requested_.store(false);
+  enabled_.store(enabled);
+  faulted_.store(core_.faulted());
+  stop_requested_.store(!enabled);
+  return enabled;
+}
+
+void CanTransport::disable()
+{
+  stop_requested_.store(true);
+  enabled_.store(false);
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  core_.disable();
+  std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+}
+
+bool CanTransport::try_set_commands(const std::vector<double> &values)
+{
+  if (values.size() != pending_cmds_.size() || !enabled_.load() || stop_requested_.load()) {
+    return false;
+  }
+  for (std::size_t motor_idx = 0; motor_idx < values.size(); ++motor_idx) {
+    if (!command_is_valid(core_.motor_configs()[motor_idx], values[motor_idx])) {
+      request_stop();
+      return false;
+    }
+  }
+  std::unique_lock<std::mutex> state_lock(state_mutex_, std::try_to_lock);
+  if (!state_lock.owns_lock()) {
+    return false;
+  }
+  const auto received_at = SteadyClock::now();
+  for (std::size_t motor_idx = 0; motor_idx < values.size(); ++motor_idx) {
+    pending_cmds_[motor_idx] = {values[motor_idx], received_at};
+  }
+  return true;
+}
+
+bool CanTransport::set_command(std::size_t motor_idx, double value)
+{
+  if (motor_idx >= pending_cmds_.size() || !enabled_.load() || stop_requested_.load()) {
+    return false;
+  }
+  if (!command_is_valid(core_.motor_configs()[motor_idx], value)) {
+    request_stop();
+    return false;
+  }
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  pending_cmds_[motor_idx] = {value, SteadyClock::now()};
+  return true;
+}
+
+bool CanTransport::try_snapshot(std::vector<MotorState> &states)
+{
+  if (states.size() != core_.motor_configs().size()) {
+    return false;
+  }
+  std::unique_lock<std::mutex> state_lock(state_mutex_, std::try_to_lock);
+  if (!state_lock.owns_lock()) {
+    return false;
+  }
+  std::copy(core_.states().begin(), core_.states().end(), states.begin());
+  return true;
+}
+
+std::vector<MotorState> CanTransport::snapshot()
+{
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  return core_.states();
+}
+
+std::string CanTransport::fault_reason()
+{
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  return core_.fault_reason();
+}
+
+void CanTransport::send_commands()
+{
+  {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    if (stop_requested_.load()) {
+      if (fault_requested_.exchange(false)) {
+        core_.stop_on_error("Stop requested by hardware/topic command validation");
+        std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+      }
+    } else {
+      for (std::size_t motor_idx = 0; motor_idx < pending_cmds_.size(); ++motor_idx) {
+        auto &cmd = pending_cmds_[motor_idx];
+        if (cmd.received_at) {
+          core_.set_command(motor_idx, cmd.value, *cmd.received_at);
+          cmd.received_at.reset();
+        }
+      }
+    }
+    core_.command_frames(SteadyClock::now(), cmd_frames_);
+    enabled_.store(core_.enabled());
+    faulted_.store(core_.faulted());
+  }
+  publish_frames();
+}
+
+void CanTransport::publish_frames()
+{
+  for (auto &frame : cmd_frames_) {
+    // A concurrent disable must not leave a previously prepared motion command in flight.
+    if (stop_requested_.load()) {
+      frame = protocol::make_set_current_frame(
+        static_cast<std::uint8_t>(frame.id & protocol::kControllerIdMask), 0.0);
+    }
+    frame.header.stamp = can_node_->now();
+    tx_pub_->publish(frame);
+  }
 }
 }  // namespace vesc_can_driver

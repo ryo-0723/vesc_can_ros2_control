@@ -10,7 +10,7 @@ have different hardware APIs and have not been validated. The C++ library explic
 requires C++20, matching the Lyrical dependencies. This is a development
 package; no ROS apt release or physical-hardware validation is claimed.
 
-Local validation (2026-10-14): Lyrical build and all 39 test cases passed with
+Local validation (2026-10-14): Lyrical build and all 40 test cases passed with
 `rmw_fastrtps_cpp`, including standalone and ros2_control integration tests.
 Installed codec usage and a `BUILD_TESTING=OFF` build also passed.
 See the [validation report](docs/validation.md). The physical CAN bus
@@ -97,6 +97,11 @@ The standalone API now uses upstream and standard messages; see the
 and `ControlMode::CurrentVelocity`, `kPi`, `kUnknownValue`, the protocol's `k*Id` constants,
 and `DriverCore::motor_configs()`. `MotorConfig::logical_id` is removed, and
 `CanTransport::set_command()` takes a motor index.
+The driver implementation has four files: `vesc_protocol`, `vesc_driver`, `vesc_node`, and
+`vesc_state`. Include `vesc_driver.hpp` for shared motor types, control and CAN transport,
+and `vesc_state.hpp` for VescState conversion/publication. The shared targets are
+`vesc_can_driver::driver` and `vesc_can_driver::state`; the codec target remains `::protocol`.
+Both standalone and ros2_control use the same driver and state libraries.
 Shared C++ headers now use `vesc_can_driver/...` and namespace `vesc_can_driver`.
 The CAN package name and CMake target prefix are also `vesc_can_driver`
 (for example, `vesc_can_driver::protocol`).

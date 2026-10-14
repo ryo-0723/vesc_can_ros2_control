@@ -65,14 +65,60 @@ struct Status6
   double ppm{};  // normalized PPM input, dimensionless
 };
 
+/// @brief ERPM の速度指令フレームを生成
+/// @param controller_id 宛先 ID（0〜254）
+/// @param electrical_rpm 電気回転数 [ERPM]
+/// @return 拡張 CAN フレーム（DLC=4）
 can_msgs::msg::Frame make_set_rpm_frame(std::uint8_t controller_id, std::int32_t electrical_rpm);
+
+/// @brief モータ電流の指令フレームを生成
+/// @param controller_id 宛先 ID（0〜254）
+/// @param motor_current_a VESC 方向のモータ電流 [A]
+/// @return 拡張 CAN フレーム（DLC=4）
+/// @throws std::out_of_range 非有限値または倍率変換後の int32 範囲外
 can_msgs::msg::Frame make_set_current_frame(std::uint8_t controller_id, double motor_current_a);
+
+/// @brief モータ PID 角度の指令フレームを生成
+/// @param controller_id 宛先 ID（0〜254）
+/// @param motor_pid_position_deg モータ PID 角度 [deg]
+/// @return 拡張 CAN フレーム（DLC=4）
+/// @throws std::out_of_range 非有限値または倍率変換後の int32 範囲外
 can_msgs::msg::Frame make_set_position_frame(
   std::uint8_t controller_id, double motor_pid_position_deg);
+
+/// @brief STATUS1 の ERPM・モータ電流・duty を読み取る
+/// @param frame 受信 CAN フレーム
+/// @param[out] status 正常時に更新するデコード結果
+/// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_1(const can_msgs::msg::Frame &frame, Status1 &status);
+
+/// @brief STATUS2 の積算電荷量を読み取る
+/// @param frame 受信 CAN フレーム
+/// @param[out] status 正常時に更新するデコード結果
+/// @return 正しい形式なら true。不正フレームでは出力を変更しない
 bool decode_status_2(const can_msgs::msg::Frame &frame, Status2 &status);
+
+/// @brief STATUS3 の積算電力量を読み取る
+/// @param frame 受信 CAN フレーム
+/// @param[out] status 正常時に更新するデコード結果
+/// @return 正しい形式なら true。不正フレームでは出力を変更しない
 bool decode_status_3(const can_msgs::msg::Frame &frame, Status3 &status);
+
+/// @brief STATUS4 の温度・入力電流・PID 角度を読み取る
+/// @param frame 受信 CAN フレーム
+/// @param[out] status 正常時に更新するデコード結果
+/// @return 正しい形式なら true。不正フレームでは出力を変更しない
 bool decode_status_4(const can_msgs::msg::Frame &frame, Status4 &status);
+
+/// @brief STATUS5 のタコメータ・入力電圧を読み取る
+/// @param frame 受信 CAN フレーム
+/// @param[out] status 正常時に更新するデコード結果
+/// @return 正しい形式なら true。不正フレームでは出力を変更しない
 bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status);
+
+/// @brief STATUS6 の ADC 電圧・PPM 入力を読み取る
+/// @param frame 受信 CAN フレーム
+/// @param[out] status 正常時に更新するデコード結果
+/// @return 正しい形式なら true。不正フレームでは出力を変更しない
 bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status);
 }  // namespace vesc_can_driver::protocol
