@@ -15,6 +15,24 @@ constexpr std::uint8_t kStatusPayloadSize = 8;
 constexpr double kCurrentCommandScale = 1000.0;
 constexpr double kPositionCommandScale = 1000000.0;
 
+/// @brief COMM コマンドを 1 枚の拡張 CAN short buffer に格納する
+can_msgs::msg::Frame make_short_command(
+  std::uint8_t controller_id, std::uint8_t host_id, std::uint8_t command, bool reply)
+{
+  if (controller_id == kBroadcastControllerId || host_id == kBroadcastControllerId ||
+      controller_id == host_id) {
+    throw std::invalid_argument("Short command requires distinct unicast motor and host IDs");
+  }
+  can_msgs::msg::Frame frame;
+  frame.id = (kProcessShortBufferId << kPacketIdShift) | controller_id;
+  frame.is_extended = true;
+  frame.dlc = 3;
+  frame.data[0] = host_id;
+  frame.data[1] = reply ? 0 : 2;
+  frame.data[2] = command;
+  return frame;
+}
+
 /// @brief int32 ペイロードを big endian の拡張 CAN 指令へ格納する
 can_msgs::msg::Frame make_command_frame(
   std::uint8_t controller_id, std::uint32_t packet_id, std::int32_t payload)
@@ -46,8 +64,8 @@ std::int32_t scale_command_value(double value, double scale)
   return static_cast<std::int32_t>(std::llround(scaled_value));
 }
 
-/// @brief STATUS の種類・拡張 ID・DLC・データフレーム条件を検査する
-bool is_valid_status_frame(const can_msgs::msg::Frame &frame, std::uint32_t packet_id)
+/// @brief パケット ID・拡張 ID・DLC・データフレーム条件を検査する
+bool is_valid_frame(const can_msgs::msg::Frame &frame, std::uint32_t packet_id)
 {
   return frame.is_extended && !frame.is_rtr && !frame.is_error && frame.id <= kExtendedCanIdMask &&
          frame.dlc == kStatusPayloadSize && (frame.id >> kPacketIdShift) == packet_id;
@@ -72,6 +90,31 @@ std::int32_t read_signed_16(const can_msgs::msg::Frame &frame, std::size_t offse
 }
 }  // namespace
 
+can_msgs::msg::Frame make_fault_request(std::uint8_t controller_id, std::uint8_t host_id)
+{
+  auto frame = make_short_command(controller_id, host_id, kGetValuesSelectiveId, true);
+  frame.dlc = 7;
+  frame.data[5] = 0x80;  // Big-endian mask: bit 15 selects fault_code.
+  return frame;
+}
+
+can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id, std::uint8_t host_id)
+{
+  return make_short_command(controller_id, host_id, kCommRebootId, false);
+}
+
+bool decode_fault_reply(const can_msgs::msg::Frame &frame, std::uint8_t host_id, FaultCode &fault)
+{
+  if (!is_valid_frame(frame, kProcessShortBufferId) || host_id == kBroadcastControllerId ||
+      (frame.id & kControllerIdMask) != host_id || frame.data[0] == kBroadcastControllerId ||
+      frame.data[0] == host_id || frame.data[1] != 1 || frame.data[2] != kGetValuesSelectiveId ||
+      frame.data[3] != 0 || frame.data[4] != 0 || frame.data[5] != 0x80 || frame.data[6] != 0) {
+    return false;
+  }
+  fault = {frame.data[0], frame.data[7]};
+  return true;
+}
+
 can_msgs::msg::Frame make_set_rpm_frame(std::uint8_t controller_id, std::int32_t electrical_rpm)
 {
   return make_command_frame(controller_id, kSetRpmId, electrical_rpm);
@@ -92,7 +135,7 @@ can_msgs::msg::Frame make_set_position_frame(
 
 bool decode_status_1(const can_msgs::msg::Frame &frame, Status1 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus1Id)) {
+  if (!is_valid_frame(frame, kStatus1Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -104,7 +147,7 @@ bool decode_status_1(const can_msgs::msg::Frame &frame, Status1 &status)
 
 bool decode_status_2(const can_msgs::msg::Frame &frame, Status2 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus2Id)) {
+  if (!is_valid_frame(frame, kStatus2Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -115,7 +158,7 @@ bool decode_status_2(const can_msgs::msg::Frame &frame, Status2 &status)
 
 bool decode_status_3(const can_msgs::msg::Frame &frame, Status3 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus3Id)) {
+  if (!is_valid_frame(frame, kStatus3Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -126,7 +169,7 @@ bool decode_status_3(const can_msgs::msg::Frame &frame, Status3 &status)
 
 bool decode_status_4(const can_msgs::msg::Frame &frame, Status4 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus4Id)) {
+  if (!is_valid_frame(frame, kStatus4Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -140,7 +183,7 @@ bool decode_status_4(const can_msgs::msg::Frame &frame, Status4 &status)
 bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status)
 {
   // VESC 6 sends eight bytes, including two reserved bytes that are not decoded.
-  if (!is_valid_status_frame(frame, kStatus5Id)) {
+  if (!is_valid_frame(frame, kStatus5Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);
@@ -151,7 +194,7 @@ bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status)
 
 bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status)
 {
-  if (!is_valid_status_frame(frame, kStatus6Id)) {
+  if (!is_valid_frame(frame, kStatus6Id)) {
     return false;
   }
   status.controller_id = static_cast<std::uint8_t>(frame.id & kControllerIdMask);

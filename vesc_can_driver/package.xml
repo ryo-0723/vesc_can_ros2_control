@@ -2,23 +2,21 @@
 <package format="3">
   <name>vesc_can_driver</name>
   <version>0.1.1</version>
-  <description>Native VESC CAN frame encoding and decoding, shared driver, standalone ROS nodes and named motor commands.</description>
+  <description>Native VESC CAN frame encoding and decoding, shared driver, standalone ROS nodes, compact motor commands and fault notifications.</description>
   <maintainer email="tengbenliang742@gmail.com">ryo-0723</maintainer>
   <license>MIT</license>
   <url type="repository">https://github.com/ryo-0723/vesc_can_ros2_control</url>
   <url type="bugtracker">https://github.com/ryo-0723/vesc_can_ros2_control/issues</url>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <build_depend>rosidl_default_generators</build_depend>
   <depend>can_msgs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>rclcpp</depend>
-  <depend>std_srvs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>vesc_can_msgs</depend>
   <depend>vesc_msgs</depend>
-  <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <test_depend>ament_cmake_gtest</test_depend>
-  <member_of_group>rosidl_interface_packages</member_of_group>
   <export><build_type>ament_cmake</build_type></export>
 </package>

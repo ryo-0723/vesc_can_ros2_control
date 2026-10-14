@@ -87,6 +87,20 @@ TEST(StateConversion, MissingValuesAndDeviceFaultAreNeverReportedAsHealthyZeros)
   EXPECT_EQ(msg.distance_traveled, kUnavailableVescInteger);
 }
 
+TEST(StateConversion, DeviceFaultCodesRequireFreshRepliesAndKeepUnknownCodes)
+{
+  const auto cfg = state_conversion_config();
+  DriverCore core({cfg});
+  const auto received_at = TimePoint{};
+  for (std::uint8_t code : {0, 4, 255}) {
+    ASSERT_TRUE(core.receive_fault({11, code}, received_at));
+    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at).fault_code, code);
+    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at + 200ms).fault_code, code);
+    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at + 201ms).fault_code, -1);
+    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at - 1ms).fault_code, -1);
+  }
+}
+
 TEST(StateConversion, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForControl)
 {
   const auto cfg = state_conversion_config();

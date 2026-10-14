@@ -177,7 +177,8 @@ bool state_ready(const MotorConfig &cfg, const MotorState &state, TimePoint now)
 {
   constexpr double kPositionToleranceRad = 1e-3;
   const auto timeout = cfg.feedback_timeout;
-  if (!feedback_fresh(state.status1_at, now, timeout)) {
+  // A known device fault remains unsafe until a healthy reply is received, even if stale.
+  if (state.fault_code > 0 || !feedback_fresh(state.status1_at, now, timeout)) {
     return false;
   }
   if (cfg.mode == ControlMode::Position) {
@@ -265,6 +266,22 @@ bool DriverCore::receive(const can_msgs::msg::Frame &frame, TimePoint now)
   return true;
 }
 
+bool DriverCore::receive_fault(const protocol::FaultCode &fault, TimePoint now)
+{
+  const auto cfg = std::find_if(configs_.begin(), configs_.end(),
+    [&fault](const MotorConfig &motor) { return motor.controller_id == fault.controller_id; });
+  if (cfg == configs_.end()) {
+    return false;
+  }
+  auto &state = states_[static_cast<std::size_t>(cfg - configs_.begin())];
+  state.fault_code = fault.code;
+  state.fault_at = now;
+  if (fault.code != 0 && !faulted_) {
+    stop_on_error(cfg->name + ": VESC fault_code=" + std::to_string(fault.code));
+  }
+  return true;
+}
+
 // Command activation, deadlines and four-mode frame generation.
 bool DriverCore::ready(TimePoint now) const
 {
@@ -276,35 +293,47 @@ bool DriverCore::ready(TimePoint now) const
   return true;
 }
 
-bool DriverCore::enable(TimePoint now)
+bool DriverCore::activate(TimePoint now)
 {
   if (!ready(now)) {
     return false;
   }
-  enabled_ = true;
+  active_ = true;
   faulted_ = false;
   fault_reason_.clear();
-  enabled_at_ = now;
+  active_at_ = now;
   std::fill(cmds_.begin(), cmds_.end(), Command{});
   return true;
 }
 
-void DriverCore::disable()
+void DriverCore::deactivate()
 {
-  enabled_ = false;
+  active_ = false;
   std::fill(cmds_.begin(), cmds_.end(), Command{});
+}
+
+bool DriverCore::reset(std::size_t motor_idx)
+{
+  if (motor_idx >= states_.size()) {
+    return false;
+  }
+  deactivate();
+  states_[motor_idx] = MotorState{};
+  faulted_ = false;
+  fault_reason_.clear();
+  return true;
 }
 
 void DriverCore::stop_on_error(const std::string &reason)
 {
-  disable();
+  deactivate();
   faulted_ = true;
   fault_reason_ = reason;
 }
 
 bool DriverCore::set_command(std::size_t idx, double value, TimePoint now)
 {
-  if (idx >= configs_.size() || !enabled_) {
+  if (idx >= configs_.size() || !active_) {
     return false;
   }
   const auto &cfg = configs_[idx];
@@ -342,7 +371,7 @@ bool DriverCore::check_commands(TimePoint now)
       stop_on_error(cfg.name + ": feedback stale or position outside limits");
       return false;
     }
-    if (now - cmd.received_at.value_or(enabled_at_) > cfg.command_timeout) {
+    if (now - cmd.received_at.value_or(active_at_) > cfg.command_timeout) {
       stop_on_error(cfg.name + ": command timeout");
       return false;
     }
@@ -352,7 +381,7 @@ bool DriverCore::check_commands(TimePoint now)
 
 void DriverCore::command_frames(TimePoint now, std::vector<can_msgs::msg::Frame> &frames)
 {
-  if (!enabled_ || !check_commands(now)) {
+  if (!active_ || !check_commands(now)) {
     stop_frames(frames);
     return;
   }
@@ -416,14 +445,20 @@ std::optional<can_msgs::msg::Frame> DriverCore::make_frame(std::size_t idx, Time
   return std::nullopt;
 }
 // ROS CAN transport: executor, latest commands and periodic transmission.
-CanTransport::CanTransport(
-  std::vector<MotorConfig> configs, TransportOptions opts, rclcpp::Node::SharedPtr can_node)
+CanTransport::CanTransport(std::vector<MotorConfig> configs, TransportOptions opts,
+  rclcpp::Node::SharedPtr can_node, std::function<void(const DriverFault &)> on_fault)
   : core_(std::move(configs)), opts_(std::move(opts)), can_node_(std::move(can_node)),
-    pending_cmds_(core_.motor_configs().size())
+    on_fault_(std::move(on_fault)), fault_requests_(core_.motor_configs().size()),
+    rx_after_(core_.motor_configs().size()), pending_cmds_(core_.motor_configs().size())
 {
   if (!can_node_ || opts_.send_period.count() <= 0 || opts_.tx_topic.empty() ||
       opts_.rx_topic.empty() || opts_.tx_topic == opts_.rx_topic) {
     throw std::invalid_argument("Invalid CAN transport node, topics or period");
+  }
+  if (opts_.fault_period.count() < 0 || opts_.host_id == protocol::kBroadcastControllerId ||
+      std::any_of(core_.motor_configs().begin(), core_.motor_configs().end(),
+        [this](const MotorConfig &cfg) { return cfg.controller_id == opts_.host_id; })) {
+    throw std::invalid_argument("Fault query period must be non-negative and host CAN ID unique");
   }
 
   cmd_frames_.reserve(core_.motor_configs().size());
@@ -431,14 +466,12 @@ CanTransport::CanTransport(
   const auto tx_qos = rclcpp::QoS(tx_depth).reliable().durability_volatile();
   tx_pub_ = can_node_->create_publisher<can_msgs::msg::Frame>(opts_.tx_topic, tx_qos);
   rx_sub_ = can_node_->create_subscription<can_msgs::msg::Frame>(opts_.rx_topic,
-    rclcpp::SensorDataQoS().keep_last(512), [this](can_msgs::msg::Frame::ConstSharedPtr frame) {
-      {
-        std::lock_guard<std::mutex> state_lock(state_mutex_);
-        core_.receive(*frame, SteadyClock::now());
-      }
-      feedback_cv_.notify_all();
-    });
+    rclcpp::SensorDataQoS().keep_last(512),
+    [this](can_msgs::msg::Frame::ConstSharedPtr frame) { receive_frame(*frame); });
   send_timer_ = can_node_->create_wall_timer(opts_.send_period, [this]() { send_commands(); });
+  if (opts_.fault_period.count() > 0) {
+    fault_timer_ = can_node_->create_wall_timer(opts_.fault_period, [this]() { poll_faults(); });
+  }
   can_exec_.add_node(can_node_);
 }
 
@@ -459,9 +492,7 @@ void CanTransport::start()
     try {
       can_exec_.spin();
     } catch (const std::exception &error) {
-      enabled_.store(false);
-      faulted_.store(true);
-      stop_requested_.store(true);
+      stop_on_error(std::string("CAN executor failed: ") + error.what());
       RCLCPP_ERROR(can_node_->get_logger(), "CAN executor failed: %s", error.what());
     }
   });
@@ -473,12 +504,15 @@ void CanTransport::shutdown() noexcept
     return;
   }
   stop_requested_.store(true);
-  enabled_.store(false);
+  active_.store(false);
   can_exec_.cancel();
   if (exec_thread_.joinable()) {
     exec_thread_.join();
   }
   try {
+    if (fault_requested_.exchange(false)) {
+      stop_on_error("Stop requested by hardware/topic command validation");
+    }
     if (rclcpp::ok(can_node_->get_node_base_interface()->get_context())) {
       core_.stop_frames(cmd_frames_);
       publish_frames();
@@ -497,33 +531,72 @@ bool CanTransport::wait_ready(std::chrono::milliseconds timeout)
   return condition_met && !shutdown_started_.load();
 }
 
-bool CanTransport::enable()
+bool CanTransport::activate()
 {
   if (shutdown_started_.load()) {
     return false;
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
+  const auto now = SteadyClock::now();
+  if (reboot_idx_ || std::any_of(rx_after_.begin(), rx_after_.end(),
+                       [now](TimePoint after) { return now < after; })) {
+    return false;
+  }
   std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
-  const bool enabled = core_.enable(SteadyClock::now());
+  const bool active = core_.activate(now);
   fault_requested_.store(false);
-  enabled_.store(enabled);
+  active_.store(active);
   faulted_.store(core_.faulted());
-  stop_requested_.store(!enabled);
-  return enabled;
+  stop_requested_.store(!active);
+  return active;
 }
 
-void CanTransport::disable()
+void CanTransport::deactivate()
 {
   stop_requested_.store(true);
-  enabled_.store(false);
+  active_.store(false);
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  core_.disable();
+  core_.deactivate();
   std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+}
+
+bool CanTransport::reboot(std::size_t motor_idx)
+{
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  if (shutdown_started_.load() || motor_idx >= pending_cmds_.size() || reboot_idx_ ||
+      SteadyClock::now() < rx_after_[motor_idx] || (!opts_.auto_activate && active_.load())) {
+    return false;
+  }
+  stop_requested_.store(true);
+  active_.store(false);
+  core_.deactivate();
+  std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+  reboot_idx_ = motor_idx;
+  return true;
+}
+
+void CanTransport::stop_on_error(const std::string &reason)
+{
+  stop_requested_.store(true);
+  active_.store(false);
+  bool notify = false;
+  {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    if (!core_.faulted()) {
+      core_.stop_on_error(reason);
+      notify = true;
+    }
+    std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+    faulted_.store(true);
+  }
+  if (notify) {
+    notify_fault({reason, std::nullopt});
+  }
 }
 
 bool CanTransport::try_set_commands(const std::vector<double> &values)
 {
-  if (values.size() != pending_cmds_.size() || !enabled_.load() || stop_requested_.load()) {
+  if (values.size() != pending_cmds_.size() || !active_.load() || stop_requested_.load()) {
     return false;
   }
   for (std::size_t motor_idx = 0; motor_idx < values.size(); ++motor_idx) {
@@ -545,14 +618,18 @@ bool CanTransport::try_set_commands(const std::vector<double> &values)
 
 bool CanTransport::set_command(std::size_t motor_idx, double value)
 {
-  if (motor_idx >= pending_cmds_.size() || !enabled_.load() || stop_requested_.load()) {
+  if (motor_idx >= pending_cmds_.size() || shutdown_started_.load()) {
     return false;
   }
   if (!command_is_valid(core_.motor_configs()[motor_idx], value)) {
-    request_stop();
+    stop_on_error(core_.motor_configs()[motor_idx].name + ": invalid command");
     return false;
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
+  if (core_.faulted() || reboot_idx_ || SteadyClock::now() < rx_after_[motor_idx] ||
+      (!opts_.auto_activate && (!active_.load() || stop_requested_.load()))) {
+    return false;
+  }
   pending_cmds_[motor_idx] = {value, SteadyClock::now()};
   return true;
 }
@@ -584,11 +661,42 @@ std::string CanTransport::fault_reason()
 
 void CanTransport::send_commands()
 {
+  std::string new_fault;
+  std::optional<can_msgs::msg::Frame> reboot_frame;
   {
     std::lock_guard<std::mutex> state_lock(state_mutex_);
+    const auto now = SteadyClock::now();
+    if (reboot_idx_) {
+      const auto idx = *reboot_idx_;
+      reboot_frame =
+        protocol::make_reboot_frame(core_.motor_configs()[idx].controller_id, opts_.host_id);
+      core_.reset(idx);
+      fault_requests_[idx].reset();
+      // Discard queued pre-reboot feedback while the VESC restarts.
+      rx_after_[idx] = now + std::chrono::milliseconds(500);
+      std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+      fault_requested_.store(false);
+      reboot_idx_.reset();
+    }
+    bool fresh_command = false;
+    for (std::size_t idx = 0; idx < pending_cmds_.size(); ++idx) {
+      auto &cmd = pending_cmds_[idx];
+      if (cmd.received_at &&
+          !feedback_fresh(cmd.received_at, now, core_.motor_configs()[idx].command_timeout)) {
+        cmd.received_at.reset();
+      }
+      fresh_command = fresh_command || cmd.received_at.has_value();
+    }
+    if (opts_.auto_activate && !core_.active() && !core_.faulted() && !fault_requested_.load() &&
+        fresh_command && core_.activate(now)) {
+      stop_requested_.store(false);
+    }
+    const bool was_faulted = core_.faulted();
     if (stop_requested_.load()) {
       if (fault_requested_.exchange(false)) {
-        core_.stop_on_error("Stop requested by hardware/topic command validation");
+        if (!was_faulted) {
+          core_.stop_on_error("Stop requested by hardware/topic command validation");
+        }
         std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
       }
     } else {
@@ -600,17 +708,110 @@ void CanTransport::send_commands()
         }
       }
     }
-    core_.command_frames(SteadyClock::now(), cmd_frames_);
-    enabled_.store(core_.enabled());
+    core_.command_frames(now, cmd_frames_);
+    active_.store(core_.active());
     faulted_.store(core_.faulted());
+    if (!was_faulted && core_.faulted()) {
+      new_fault = core_.fault_reason();
+    }
   }
   publish_frames();
+  if (reboot_frame) {
+    reboot_frame->header.stamp = can_node_->now();
+    tx_pub_->publish(*reboot_frame);
+  }
+  if (!new_fault.empty()) {
+    notify_fault({new_fault, std::nullopt});
+  }
+}
+
+void CanTransport::poll_faults()
+{
+  const auto &configs = core_.motor_configs();
+  for (std::size_t idx = 0; idx < configs.size(); ++idx) {
+    if (SteadyClock::now() < rx_after_[idx]) {
+      continue;
+    }
+    auto frame = protocol::make_fault_request(configs[idx].controller_id, opts_.host_id);
+    fault_requests_[idx] = SteadyClock::now();
+    frame.header.stamp = can_node_->now();
+    tx_pub_->publish(frame);
+  }
+}
+
+void CanTransport::receive_frame(const can_msgs::msg::Frame &frame)
+{
+  if (frame.is_error) {
+    stop_on_error("CAN error frame received: id=" + std::to_string(frame.id));
+    return;
+  }
+  const auto now = SteadyClock::now();
+  protocol::FaultCode device_fault;
+  std::optional<DriverFault> event;
+  {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    if (protocol::decode_fault_reply(frame, opts_.host_id, device_fault)) {
+      const auto &configs = core_.motor_configs();
+      const auto cfg =
+        std::find_if(configs.begin(), configs.end(), [&device_fault](const MotorConfig &motor) {
+          return motor.controller_id == device_fault.controller_id;
+        });
+      if (cfg == configs.end()) {
+        return;
+      }
+      const auto idx = static_cast<std::size_t>(cfg - configs.begin());
+      if (now < rx_after_[idx] || !feedback_fresh(fault_requests_[idx], now, opts_.fault_period)) {
+        return;  // Ignore unsolicited, duplicate or late replies.
+      }
+      fault_requests_[idx].reset();
+      const auto previous_code = core_.states()[idx].fault_code;
+      core_.receive_fault(device_fault, now);
+      if (device_fault.code != 0) {
+        stop_requested_.store(true);
+        active_.store(false);
+        faulted_.store(true);
+        std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+        if (previous_code != device_fault.code) {
+          event = DriverFault{
+            cfg->name + ": VESC fault_code=" + std::to_string(device_fault.code), device_fault};
+        }
+      }
+    } else {
+      const auto &configs = core_.motor_configs();
+      const auto cfg =
+        std::find_if(configs.begin(), configs.end(), [&frame](const MotorConfig &motor) {
+          return motor.controller_id == (frame.id & protocol::kControllerIdMask);
+        });
+      if (cfg != configs.end() &&
+          now < rx_after_[static_cast<std::size_t>(cfg - configs.begin())]) {
+        return;
+      }
+      core_.receive(frame, now);
+    }
+  }
+  feedback_cv_.notify_all();
+  if (event) {
+    notify_fault(*event);
+  }
+}
+
+void CanTransport::notify_fault(const DriverFault &fault)
+{
+  RCLCPP_ERROR(can_node_->get_logger(), "%s", fault.reason.c_str());
+  if (!on_fault_) {
+    return;
+  }
+  try {
+    on_fault_(fault);
+  } catch (const std::exception &error) {
+    RCLCPP_ERROR(can_node_->get_logger(), "Fault notification failed: %s", error.what());
+  }
 }
 
 void CanTransport::publish_frames()
 {
   for (auto &frame : cmd_frames_) {
-    // A concurrent disable must not leave a previously prepared motion command in flight.
+    // A concurrent deactivate must not leave a previously prepared motion command in flight.
     if (stop_requested_.load()) {
       frame = protocol::make_set_current_frame(
         static_cast<std::uint8_t>(frame.id & protocol::kControllerIdMask), 0.0);

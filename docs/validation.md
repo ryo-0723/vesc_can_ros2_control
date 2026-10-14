@@ -365,3 +365,118 @@ names にモータ名、values に設定したモードの指令値を入れ、C
 シリアライズ・デシリアライズも成功しました
 全 C++ の clang-format、Python 3 ファイルの Black、`git diff --check` は成功しています
 検証は模擬環境で、実 CAN バス・モータ・Zenoh pico は未検証です
+
+## 論理 ID 指令と即時の異常通知へ変更した後の検証
+
+2026-10-14、共有チャットの軽量指令に合わせ、VescCommand と VescCommandArray を追加しました
+各要素は motor_id / mode / float32 value で、motor_id は通常ノードの YAML の logical_id に対応します
+YAML でモードを固定し、指令の mode が一致しなければ全台停止します
+command_topic / error_topic を設定でき、rox2026 と同じ3モータの割り当てを持つ設定例を追加しました
+
+Lyrical でドライバ単体と hardware plugin をビルドし、**45 ケースが成功**しました
+最終の `colcon test-result` は `50 tests, 0 errors, 0 failures, 0 skipped` です
+protocol/core 24、transport 3、state_conversion 3、hardware 設定 7、統合 7、終了コード 1 の内訳です
+
+- 論理 ID と CAN ID の分離、配列順によらない振り分け、4 モードの混在
+- 未登録 ID、重複 ID、モード不一致、不正な指令値での全台停止と異常保持
+- rox2026 の論理 ID 10 / 11 / 12 から CAN ID 51 / 52 / 50 への指令と状態配信
+- CAN エラーフレームと通常ノードの不正指令が、状態周期を待たずに通知されること
+- 異常通知が状態ロック外で実行され、shutdown 時の未処理の異常も通知されること
+- ros2_control のフィードバック途絶時にも、publisher の破棄前に異常通知が届くこと
+- 通常ノードの TransientLocal 購読者が、最後の異常イベントを取得できること
+
+状態周期を 2000 ms にした模擬構成で、不正指令の通知を 1.5 ms、CAN エラーの通知を 1.6 ms で受信しました
+これはこの検証での受信遅延で、実機・DDS・OS を含む遅延保証ではありません
+通常の状態・指令は従来どおり VescState 50 Hz、各モータの CAN 指令 100 Hz です
+ros2_control の state interface は 100 Hz、JointState は 50 Hz です
+
+上流 VescState / VescStateStamped の SHA-256 と、vesc_protocol.hpp/.cpp は編集前と一致しています
+インストール後の外部 CMake 利用、指令メッセージの C++ / Python シリアライズ、
+全 C++ の clang-format、Python 3 ファイルの Black、`git diff --check` も成功しました
+実 CAN バス・モータ・Zenoh pico は未検証で、STATUS1〜6 から VESC 本体の故障コードは取得できません
+
+
+## 指令型の独立と CAN 故障コード取得後の検証
+
+2026-10-14、指令型を独立した vesc_can_msgs パッケージに移動しました
+VescCommand は motor_id / float32 value のみで、モードは起動時の設定で固定します
+VescCommandArray に builtin_interfaces/Time stamp を追加しました
+
+VESC firmware 6.06 の commands.c / comm_can.c / datatypes.h を確認し、
+COMM_GET_VALUES_SELECTIVE の bit 15 による故障コード問い合わせを追加しました
+要求は CAN_PACKET_PROCESS_SHORT_BUFFER の DLC=7、応答は DLC=8 です
+既定 100 ms ごとに問い合わせ、非ゼロの応答を受信した処理から /vesc/event へ配信します
+DiagnosticArray の values に source=vesc / controller_id / fault_code を持たせ、
+PC 側の異常は source=driver として区別します
+
+Lyrical / rmw_fastrtps_cpp で **53 ケースが成功** しました
+colcon test-result の集計は、テスト実行単位 5 件を含む **58 tests, 0 errors, 0 failures** です
+
+- vesc_can_msgs 単体を先にビルドし、ドライバをビルドする前に外部 C++ / Python から指令型のシリアライズを確認
+- 通常ノードの mode 変更拒否と、古い・未来の stamp が受信側の指令期限を変えないことを確認
+- 公式の既知バイト列で故障の要求・応答を確認し、異なる宛先・mask・コマンド・DLC・フラグを拒否
+- 本体の故障で全台停止し、正常応答が来るまで再有効化できず、故障情報の期限切れでも停止が解除されないことを確認
+- 同一の故障コードの重複抑制、停止中のコード変更通知、取得値の鮮度、未取得値 -1 を確認
+- 問い合わせ無効時に要求していない故障応答を受理しないことを確認
+- 状態周期 2000 ms の通常ノードで、周期配信を待たず故障イベントを受信し、周期の診断にも本体の故障理由が出ることを確認
+
+CAN 動作指令は各モータ 100 Hz、VescState / JointState は 50 Hz を維持しています
+故障問い合わせの 10 Hz は動作指令とは別の周期です
+追加の ros2_control 模擬確認でも、CAN ID 12 の故障コード 4 が publisher の終了前に届き、
+4 モータが停止して全コントローラが無効化されました
+
+外部 CMake 利用、ros2 topic pub の stamp: now、全 C++ の clang-format、
+Python の Black、git diff --check も成功しました
+上流 VescState / VescStateStamped の内容は変更していません
+検証対象は独立した VESC ID を持つ模擬構成で、dual-motor 基板の第2モータの応答は対象外です
+実 CAN バス・モータ・Zenoh pico での動作は未検証です
+
+
+## rox2026 の故障応答フィルタを追加した検証
+
+2026-10-15、rox2026 の robot_bringup/launch/hardware/ros2_socketcan.launch.py に、
+PC の CAN ID 254 宛ての故障応答（拡張 ID 0x8FE）を通すフィルタを追加しました
+STATUS1 の既存フィルタは保持し、設定値は 00000900:9FFFFF00,000008FE:9FFFFFFF です
+
+rox2026 の ros2_socketcan の実際の C++ フィルタ解析を使い、524 条件を検査しました
+すべての STATUS1 ID が引き続き通り、short buffer 応答は宛先 254 のみを通すこと、
+標準 ID・STM32・EduLite のフレームがこの VESC フィルタを通らないことを確認しています
+launch の Python 構文と、フィルタ以外のノード設定が変わっていないことも確認しました
+両リポジトリの git diff --check は成功しました
+実 CAN バスでの受信とブリッジの再起動は実施していません
+
+再起動については公式 6.06 の COMM_REBOOT=29 と NVIC_SystemReset() を確認し、
+short buffer に包む形式と、PC 側の enable による停止保持解除を README へ記録しました
+
+
+## 有効化サービスを再起動サービスへ置き換えた検証
+
+2026-10-15、通常ノードの ~/enable と auto_enable_once を廃止し、
+新鮮な必要 STATUS と新しい指令が揃うと動作を開始する構成に変更しました
+~/reboot は独立した vesc_can_msgs/srv/Reboot を使い、uint8 motor_id に論理 ID を指定します
+対応する 1 台へ公式の COMM_REBOOT=29 を short buffer / DLC=3 / send=2 で 1 回送ります
+要求受理は success=true とし、再起動の完了を保証する応答ではありません
+
+再起動処理は CAN executor で停止フレームを送った後に実行します
+保存した指令は全台分を破棄し、対象の受信状態をクリアします
+500 ms は対象の指令と受信状態を受理せず、その後の新鮮な状態と新しい指令を使います
+PC 内部の開始・停止 API は activate / deactivate / active に整理し、
+ros2_control の lifecycle ではこの API を使用します
+
+Lyrical / rmw_fastrtps_cpp で **57 ケースが成功** しました
+colcon test-result は実行単位 5 件を含む **62 tests, 0 errors, 0 failures** です
+
+- 独立した指令・再起動インターフェースのビルドと、C++ / Python でのシリアライズを確認
+- enable サービスなしで通常ノードの指令から 4 モードの動作を開始することを確認
+- フィードバックより先に届いた新しい指令を保持し、状態が揃うまで動作指令を出さないことを確認
+- COMM_REBOOT の既知バイト列、ID 範囲、broadcast 拒否を確認
+- reboot の論理 ID 11 が CAN ID 52 に変換され、対象の 1 台に 1 回だけ送信されることを確認
+- CAN ID を論理 ID として渡した不正要求、再起動待機中の重複要求を拒否することを確認
+- 対象の旧 STATUS を使わず、保存済み指令を再送せず、新しい指令で復旧することを確認
+- 不正指令・通信途絶・VESC 本体故障の即時通知と停止を維持することを確認
+
+実測の CAN 動作指令は各モータ約 100 Hz、VescState / JointState は約 50 Hz でした
+インストール後の外部 CMake 利用は新しい activate API で成功しています
+全 C++ の clang-format、Python の Black、git diff --check も成功しました
+上流 VescState / VescStateStamped の定義は変更していません
+再起動の検証は模擬 CAN で、実機への再起動命令は送信していません

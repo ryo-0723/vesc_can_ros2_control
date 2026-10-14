@@ -2,13 +2,20 @@
   ros__parameters:
     can_tx_topic: /can/tx
     can_rx_topic: /can/rx
+    command_topic: /vesc/commands
+    error_topic: /vesc/event
+    host_can_id: 254
+    fault_poll_period_ms: 100
     update_period_ms: 10
     state_publish_period_ms: 20
-    auto_enable_once: false
-    motors: [drive_joint, steer_joint]
+    motors:
+      - drive_joint
+      - steer_joint
+
     drive_joint:
-      controller_id: 11
-      command_interface: velocity
+      logical_id: 1                  # 上位ノードが指令に指定する ID
+      controller_id: 11              # VESC Tool で設定した CAN の機器 ID
+      control_mode: velocity
       pole_pairs: 7.0
       gear_ratio: 1.0
       max_rpm: 190.0
@@ -18,8 +25,9 @@
       command_timeout_ms: 300
       require_tachometer: true
     steer_joint:
+      logical_id: 2
       controller_id: 21
-      command_interface: position
+      control_mode: position
       pole_pairs: 7.0
       gear_ratio: 1.0
       zero_offset_rad: 0.0

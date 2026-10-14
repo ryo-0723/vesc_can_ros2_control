@@ -51,6 +51,8 @@ public:
       declare_parameter<std::vector<std::int64_t>>("controller_ids", {11, 21});
     pole_pairs_ = declare_parameter<double>("pole_pairs", 7.0);
     declare_parameter<bool>("publish_feedback", true);
+    declare_parameter<std::int64_t>("fault_controller_id", -1);
+    declare_parameter<std::int64_t>("fault_code", 0);
     const auto feedback_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("period_ms", 20));
     watchdog_timeout_ =
@@ -92,12 +94,13 @@ private:
     double pos_rad{};
     double motor_current_a{};
     TimePoint cmd_at{};
+    TimePoint boot_until{};
   };
 
   /// @brief 登録 ID の電流・速度・位置指令を模擬状態へ反映する
   void handle_can_command(const can_msgs::msg::Frame &frame)
   {
-    if (!frame.is_extended || frame.is_rtr || frame.is_error || frame.dlc != 4 ||
+    if (!frame.is_extended || frame.is_rtr || frame.is_error ||
         frame.id > protocol::kExtendedCanIdMask) {
       return;
     }
@@ -110,6 +113,45 @@ private:
       return;
     }
     const auto packet_id = frame.id >> protocol::kPacketIdShift;
+    if (packet_id == protocol::kProcessShortBufferId && frame.dlc == 3 && frame.data[1] == 2 &&
+        frame.data[2] == protocol::kCommRebootId) {
+      const auto id = motor_it->controller_id;
+      *motor_it = FakeMotor{};
+      motor_it->controller_id = id;
+      motor_it->cmd_at = SteadyClock::now();
+      motor_it->boot_until = motor_it->cmd_at + std::chrono::milliseconds(200);
+      if (get_parameter("fault_controller_id").as_int() == id) {
+        set_parameter(rclcpp::Parameter("fault_code", std::int64_t{0}));
+      }
+      return;
+    }
+    if (SteadyClock::now() < motor_it->boot_until) {
+      return;
+    }
+    if (packet_id == protocol::kProcessShortBufferId && frame.dlc == 7 && frame.data[1] == 0 &&
+        frame.data[2] == protocol::kGetValuesSelectiveId && frame.data[3] == 0 &&
+        frame.data[4] == 0 && frame.data[5] == 0x80 && frame.data[6] == 0) {
+      if (!get_parameter("publish_feedback").as_bool()) {
+        return;
+      }
+      const auto fault_id = get_parameter("fault_controller_id").as_int();
+      const auto code = get_parameter("fault_code").as_int();
+      if (code < 0 || code > 255) {
+        return;
+      }
+      can_msgs::msg::Frame reply;
+      reply.header.stamp = now();
+      reply.id = (protocol::kProcessShortBufferId << 8) | frame.data[0];
+      reply.is_extended = true;
+      reply.dlc = 8;
+      reply.data = {motor_it->controller_id, 1, protocol::kGetValuesSelectiveId, 0, 0, 0x80, 0,
+        static_cast<std::uint8_t>(fault_id == motor_it->controller_id ? code : 0)};
+      feedback_pub_->publish(reply);
+      return;  // Reading fault_code does not refresh the command watchdog.
+    }
+    if (frame.dlc != 4) {
+      return;
+    }
     const auto value = read_command_payload(frame.data);
     switch (packet_id) {
       case protocol::kSetRpmId:
@@ -191,6 +233,9 @@ private:
     last_update_at_ = steady_now;
     const bool publish_feedback = get_parameter("publish_feedback").as_bool();
     for (auto &motor : motors_) {
+      if (steady_now < motor.boot_until) {
+        continue;
+      }
       if (steady_now - motor.cmd_at > watchdog_timeout_) {
         motor.electrical_rpm = 0.0;
         motor.motor_current_a = 0.0;

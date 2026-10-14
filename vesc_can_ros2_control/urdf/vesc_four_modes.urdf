@@ -24,6 +24,8 @@
       <param name="can_tx_topic">/bench/can/tx</param>
       <param name="can_rx_topic">/bench/can/rx</param>
       <param name="send_period_ms">10</param>
+      <param name="host_can_id">254</param>
+      <param name="fault_poll_period_ms">100</param>
       <param name="state_publish_period_ms">20</param>
       <param name="activation_timeout_ms">2000</param>
     </hardware>

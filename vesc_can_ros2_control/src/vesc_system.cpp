@@ -149,6 +149,13 @@ hardware_interface::CallbackReturn VescSystem::on_init(
     opts_.rx_topic = get_string_parameter(hw_params, "can_rx_topic", "/can/rx");
     opts_.send_period =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "send_period_ms", 10));
+    const auto host_id = get_integer_parameter(hw_params, "host_can_id", 254);
+    if (host_id > 254) {
+      throw std::invalid_argument("Host CAN ID must be in [0, 254]");
+    }
+    opts_.host_id = static_cast<std::uint8_t>(host_id);
+    opts_.fault_period =
+      std::chrono::milliseconds(get_integer_parameter(hw_params, "fault_poll_period_ms", 100));
     activation_timeout_ =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "activation_timeout_ms", 2000));
     state_period_ =
@@ -201,8 +208,13 @@ hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecyc
     const auto node_ns = hw_node ? hw_node->get_namespace() : "/";
     auto can_node =
       std::make_shared<rclcpp::Node>(get_hardware_info().name + "_can_io", node_ns, node_opts);
-    transport_ = std::make_unique<vesc_can_driver::CanTransport>(configs_, opts_, can_node);
-    state_pub_ = std::make_unique<vesc_can_driver::MotorStatePublisher>(*can_node, configs_);
+    const auto error_topic =
+      get_string_parameter(get_hardware_info().hardware_parameters, "error_topic", "/vesc/event");
+    state_pub_ =
+      std::make_unique<vesc_can_driver::MotorStatePublisher>(*can_node, configs_, error_topic);
+    transport_ = std::make_unique<vesc_can_driver::CanTransport>(configs_, opts_, can_node,
+      [pub = state_pub_.get()](
+        const vesc_can_driver::DriverFault &fault) { pub->publish_error(fault); });
     state_timer_ =
       can_node->create_wall_timer(state_period_, [this, clock = can_node->get_clock()]() {
         const auto states = transport_->snapshot();
@@ -232,7 +244,7 @@ hardware_interface::CallbackReturn VescSystem::on_activate(const rclcpp_lifecycl
         : 0.0;
     set_command(cmd_handles_[motor_idx], initial_cmd, true);
   }
-  active_ = transport_->enable();
+  active_ = transport_->activate();
   return active_ ? hardware_interface::CallbackReturn::SUCCESS
                  : hardware_interface::CallbackReturn::ERROR;
 }
@@ -241,7 +253,7 @@ hardware_interface::CallbackReturn VescSystem::on_deactivate(const rclcpp_lifecy
 {
   active_ = false;
   if (transport_) {
-    transport_->disable();
+    transport_->deactivate();
   }
   return hardware_interface::CallbackReturn::SUCCESS;
 }

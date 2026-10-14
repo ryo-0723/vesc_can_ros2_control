@@ -24,11 +24,12 @@
   <test_depend>launch_testing_ament_cmake</test_depend>
   <test_depend>launch_testing_ros</test_depend>
   <test_depend>rclpy</test_depend>
+  <test_depend>vesc_can_msgs</test_depend>
+  <test_depend>builtin_interfaces</test_depend>
   <test_depend>can_msgs</test_depend>
   <test_depend>diagnostic_msgs</test_depend>
   <test_depend>sensor_msgs</test_depend>
   <test_depend>std_msgs</test_depend>
-  <test_depend>std_srvs</test_depend>
   <test_depend>vesc_msgs</test_depend>
   <test_depend>controller_manager_msgs</test_depend>
   <test_depend>rcl_interfaces</test_depend>

@@ -1,0 +1,55 @@
+/**/vesc_can_ros2_control:
+  ros__parameters:
+    can_tx_topic: /socketcan_bridge/tx
+    can_rx_topic: /socketcan_bridge/vesc/rx
+    command_topic: /vesc/commands
+    error_topic: /vesc/event
+    host_can_id: 254
+    fault_poll_period_ms: 100
+    update_period_ms: 10
+    state_publish_period_ms: 20
+
+    motors:
+      - upper_belt
+      - under_belt
+      - dribble
+
+    upper_belt:
+      logical_id: 10
+      controller_id: 51
+      control_mode: current_velocity
+      pole_pairs: 7.0
+      max_rpm: 5600.0
+      rpm_slew_rate: 2000.0
+      max_current_a: 10.0
+      startup_current_a: 7.5
+      rpm_control_threshold_rpm: 800.0
+      startup_timeout_ms: 1000
+      feedback_timeout_ms: 500
+      command_timeout_ms: 500
+
+    under_belt:
+      logical_id: 11
+      controller_id: 52
+      control_mode: current_velocity
+      pole_pairs: 7.0
+      max_rpm: 5600.0
+      rpm_slew_rate: 2000.0
+      max_current_a: 10.0
+      startup_current_a: 7.5
+      rpm_control_threshold_rpm: 800.0
+      startup_timeout_ms: 1000
+      feedback_timeout_ms: 500
+      command_timeout_ms: 500
+
+    dribble:
+      logical_id: 12
+      controller_id: 50
+      control_mode: velocity
+      pole_pairs: 7.0
+      max_rpm: 5600.0
+      rpm_slew_rate: 5000.0
+      startup_current_a: 0.0
+      rpm_control_threshold_rpm: 0.0
+      feedback_timeout_ms: 500
+      command_timeout_ms: 500

@@ -111,13 +111,14 @@ joint_rad = remainder(feedback_deg × π / 180 - zero_offset_rad, 2π)
 
 | control_mode | command_interface | 通常ノードの入力 |
 |---|---|---|
-| current | current | MotorCommands.values [A] |
-| velocity | velocity | MotorCommands.values [rad/s] |
-| position | position | MotorCommands.values [rad] |
-| current_velocity | velocity | MotorCommands.values [rad/s] |
+| current | current | VescCommand.value [A] |
+| velocity | velocity | VescCommand.value [rad/s] |
+| position | position | VescCommand.value [rad] |
+| current_velocity | velocity | VescCommand.value [rad/s] |
 
 ```yaml
 drive_joint:
+  logical_id: 1
   controller_id: 11
   control_mode: velocity
   pole_pairs: 7.0
@@ -125,6 +126,7 @@ drive_joint:
   max_rpm: 190.0
   rpm_slew_rate: 955.0
 steer_joint:
+  logical_id: 2
   controller_id: 21
   control_mode: position
   pole_pairs: 7.0
@@ -132,11 +134,13 @@ steer_joint:
   min_position: -1.0
   max_position: 1.0
 current_joint:
+  logical_id: 3
   controller_id: 12
   control_mode: current
   pole_pairs: 7.0
   max_current_a: 3.0
 hybrid_joint:
+  logical_id: 4
   controller_id: 31
   control_mode: current_velocity
   pole_pairs: 7.0
@@ -148,9 +152,10 @@ hybrid_joint:
 
 上記は `ros__parameters` 内の抜粋です。完全な設定は
 [four_modes.yaml](../vesc_can_driver/config/four_modes.yaml) を参照してください。
-通常ノードの指令は `MotorCommands.names` でモータ名を指定し、`values` に対応する
-モードの指令値を入れます
-全 4 モードを同じ `~/commands` で受け付け、2 つの配列の長さを一致させます
+通常ノードの指令は `VescCommandArray.commands` に各モータの指令を入れます
+motor_id は YAML の logical_id で、制御モードは起動時の control_mode から決まります
+配列の stamp は生成時の ROS 時刻で、指令に mode は持たせません
+value に電流 [A]、関節位置 [rad]、関節速度 [rad/s] を指定します
 上位ノードに CAN ID の対応表を持たせる必要はありません
 
 ros2_control では各 joint に `control_mode` param と上表の command interface を
@@ -184,14 +189,12 @@ ros2 launch vesc_can_driver vesc_standalone.launch.py \
   config:="$(ros2 pkg prefix --share vesc_can_driver)/config/four_modes.yaml"
 ```
 
-通常ノードでは次の指令ストリームを起動し、フィードバックが届いてから
-別の端末で enable を呼びます
-無効中の指令は破棄され、有効化後に届く新しい指令を使います
+通常ノードでは次の指令ストリームを起動します
+必要なフィードバックと新しい指令が揃うと動作を開始します
 
 ```bash
-ros2 topic pub -r 20 /vesc_can_ros2_control/commands vesc_can_driver/msg/MotorCommands \
-  '{names: [drive_joint, steer_joint, current_joint, hybrid_joint], values: [2.0, 0.25, 1.5, 2.0]}'
-ros2 service call /vesc_can_ros2_control/enable std_srvs/srv/SetBool '{data: true}'
+ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
+  '{stamp: now, commands: [{motor_id: 1, value: 2.0}, {motor_id: 2, value: 0.25}, {motor_id: 3, value: 1.5}, {motor_id: 4, value: 2.0}]}'
 ```
 
 全モータへ command_timeout_ms 内に新しい指令を送り続けます
@@ -215,9 +218,8 @@ startup_current_a を設定して暗黙に電流始動する」設定は、
 
 ## 有効化、異常、停止
 
-通常ノードは既定で無効状態です。全台の必要な STATUS が新鮮になってから
-`~/enable` へ `true` を送り、その後全台へ新しい指令を送ります。
-`auto_enable_once=true` は初回だけの自動有効化です。
+通常ノードは全台の必要な STATUS と新しい指令が揃うと動作を開始します
+VESC の有効化コマンドや enable サービスは使いません
 plugin は activate 時にフィードバックを待ち、電流・速度・電流＋速度の初期指令を 0、
 位置の初期指令を現在位置に設定します。
 
@@ -225,8 +227,8 @@ plugin は activate 時にフィードバックを待ち、電流・速度・電
 同じドライバ内の全台へ `SET_CURRENT(0 A)` を送ります。
 位置モードも異常停止時は位置保持を解除します。
 異常は保持され、フィードバックや指令が再開しても自動復帰しません。
-通常ノードは enable サービス、plugin は controller_manager による lifecycle の
-復旧操作で再有効化します。
+通常ノードは ~/reboot に論理 motor_id を指定して対象 VESC を再起動し、全台へ新しい指令を送ります
+plugin は controller_manager による lifecycle の復旧操作で再開します
 
 plugin の `command_timeout_ms` は hardware `write()` の指令更新を監視します。
 付属の forward controller は最後の値を保持するので、上位トピックの途絶だけでは

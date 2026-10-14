@@ -16,36 +16,71 @@ ROS パッケージで、VESC firmware の CAN パケットそのものとは別
 |---|---|---|
 | CAN 境界 | can_msgs/msg/Frame | 元の CAN ID、フラグ、DLC、ペイロードを保持 |
 | VESC 状態 | vesc_msgs/msg/VescStateStamped | モータ名ごとのトピックで識別、state.controller_id は VESC の機器 ID |
-| モータ指令（通常ノード） | vesc_can_driver/msg/MotorCommands | モータ名と指令値の配列、設定したモードに応じて A / 関節 rad / rad/s |
+| モータ指令（通常ノード） | vesc_can_msgs/msg/VescCommandArray | 生成時刻と論理 ID・float32 指令値の配列、単位は A / 関節 rad / rad/s |
 | 関節状態（ros2_control） | sensor_msgs/msg/JointState | joint_state_broadcaster が state interface から配信 |
-| 有効化・無効化 | std_srvs/srv/SetBool | 明示的な有効化と異常解除 |
+| VESC 再起動（通常ノード） | vesc_can_msgs/srv/Reboot | motor_id は論理 ID、対応する 1 台を再起動 |
 | 接続・鮮度・ドライバ異常 | diagnostic_msgs/msg/DiagnosticArray | モータごとの hardware_id と key/value |
+| 即時の異常通知 | diagnostic_msgs/msg/DiagnosticArray | /vesc/event に VESC 故障コードまたは PC 側の停止理由を配信 |
 
 上流 `vesc_msgs` は状態用のパッケージです
-通常ノードの独自指令は `vesc_can_driver/msg/MotorCommands.msg` に置きます
-CAN フレームと有効化サービスには標準型を使います
+通常ノードの独自指令は独立した `vesc_can_msgs/msg/VescCommand.msg` と `VescCommandArray.msg` に置きます
+上位ノードは vesc_can_msgs に依存すれば使え、ドライバ全体への依存は不要です
+CAN フレームには標準型を使い、再起動サービスは独立した vesc_can_msgs に置きます
 VescImu/VescImuStamped はネイティブ STATUS に
 IMU データがないため、ソースにも生成対象にも含めません。
 
 ## 通常ノードのモータ識別と指令
 
 1 つの通常ノードが `motors` に登録した全台を管理します
-ROS 側の識別子はモータ名で、数値の logical_id は追加しません
-モータ名と CAN の機器 ID の対応は YAML の `controller_id` に集約します
-指令は `~/commands`、状態は `~/motors/<motor_name>/state` を使用します
-上位ノードは同じモータ名で送受信でき、CAN ID を知る必要はありません
+ROS 側の数値 ID は `logical_id`、CAN の機器 ID は `controller_id` で管理します
+モータ一覧と、モータ名ごとの設定は rox2026 の YAML と同じ形です
+指令は `command_topic`（既定 `/vesc/commands`）、状態は `~/motors/<motor_name>/state` を使用します
 
 ```text
-string[] names
-float64[] values
+# VescCommand
+uint8 motor_id
+float32 value
+
+# VescCommandArray
+builtin_interfaces/Time stamp
+VescCommand[] commands
 ```
 
-names と values の長さを揃え、各指令値の単位はそのモータの設定から決まります
+motor_id は設定の logical_id に対応し、0〜255 の範囲で重複させません
+モードは YAML の control_mode で起動時に固定し、指令に mode は持たせません
+通常ノードは control_mode / command_interface パラメータの起動後の変更も拒否します
+value は電流 [A]、関節速度 [rad/s]、関節位置 [rad] のいずれかです
 配列順は自由で、未指定モータの指令と期限は維持します
-配列長の不一致、未登録名、重複名、不正な指令値は全台停止になります
-モードは指令から切り替えません
-JointState は関節状態用で、effort は電流ではなくトルクなので指令に流用しません
+未登録 ID、重複 ID、不正な指令値は全台停止になります
+stamp は送信側の ROS 生成時刻で、タイムアウトには受信側の単調時刻を使用します
+stamp が 0 の指令も受け付け、古い・未来の stamp によって指令期限を延長しません
 状態メッセージ内の controller_id は元の VESC 機器 ID を保持します
+
+異常は `error_topic`（既定 `/vesc/event`）へ DiagnosticArray で即時通知します
+不正指令・CAN エラーフレームはコールバック、期限切れは CAN 周期で検出した直後に配信します
+VESC 本体の異常は該当モータだけを status に入れ、values に source=vesc / controller_id / fault_code を格納します
+PC 側の異常は source=driver として全台の停止理由を通知します
+同じ本体の故障コードは繰り返さず、変化・正常応答後の再発を通知します
+最後のイベントを TransientLocal で保持し、周期の VescState で現在のコードを確認できます
+問い合わせの既定周期は 100 ms、異常応答を受信した処理から即時配信します
+
+## 再起動サービス
+
+通常ノードの ~/reboot は vesc_can_msgs/srv/Reboot です
+
+```text
+uint8 motor_id
+---
+bool success
+string message
+```
+
+motor_id は指令と同じ YAML の logical_id です
+success は要求の受理を表し、本体の再起動完了の確認ではありません
+対応する CAN ID へ COMM_REBOOT を 1 回送り、保存した指令は全台分を破棄します
+対象の受信状態をクリアし、500 ms 後の新鮮な状態と新しい指令から再開します
+通常ノードの ~/enable は廃止し、起動後は指令の受信だけで動作を開始します
+ros2_control の PC 側の開始・停止は lifecycle に従います
 
 ## コピーと vcs 取得の使い分け
 
@@ -68,7 +103,8 @@ JointState は関節状態用で、effort は電流ではなくトルクなの�
 
 CAN レイアウトは [VESC firmware 6.06 の送信処理](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c)
 を基準にします。現在、通常モータ向けの周期状態 STATUS1〜6 をデコード・保存します。
-設定・BMS・GNSS・ファームウェア更新・問い合わせ応答の全パケットには対応していません。
+故障コードの selective 問い合わせにも対応します
+設定・BMS・GNSS・ファームウェア更新・問い合わせ応答の全パケットには対応していません
 
 | 受信 | VescState のフィールド | 配信する値 |
 |---|---|---|
@@ -78,6 +114,7 @@ CAN レイアウトは [VESC firmware 6.06 の送信処理](https://github.com/v
 | STATUS4 | temp_fet / temp_motor / current_input / pid_pos_now | 温度 [℃]、入力電流 [A]、モータ PID 角度 [deg] |
 | STATUS5 | displacement / voltage_input | 符号付きタコメータ [count]、入力電圧 [V] |
 | STATUS6 | 対応するフィールドなし | ADC1〜3 [V] と PPM 値を /diagnostics に配信 |
+| COMM_GET_VALUES_SELECTIVE（bit 15） | fault_code | VESC 本体の故障コード、正常応答は 0 |
 
 `speed` は極対数・減速比・方向を適用する前の ERPM です。`pid_pos_now` も生の
 モータ PID 角度です。ros2_control の state interface には変換後の関節単位を渡します。
@@ -90,9 +127,13 @@ STATUS2/3/6 を受信していなくても、制御に必要なフィードバ�
 有効化できます。対応可能な STATUS をすべて高頻度で送信する必要はありません。
 
 STATUS1〜6 から取得できない avg_id/avg_iq/ntc_temp_mos1〜3/avg_vd/avg_vq は
-常に NaN、distance_traveled と fault_code は **-1 (未取得)** です。
+常に NaN、distance_traveled は **-1 (未取得)** です
+fault_code は別途 selective 問い合わせで取得し、未受信・期限切れは **-1** です
 fault_code=0 は実機の「故障なし」を意味するため、未取得値には使いません。
-ドライバの通信途絶などを VESC の故障番号へ変換せず、/diagnostics に配信します。
+ドライバの通信途絶などを VESC の故障番号へ変換せず、/diagnostics と即時の /vesc/event に配信します
+イベントの fault_code は DiagnosticStatus.values の文字列なので、上位ノードで整数へ変換します
+VescState.fault_code は従来どおり int32 です
+故障コードの取得・応答先 ID・中継フィルタは [CAN 故障問い合わせ](../vesc_can_driver/README.md#即時の異常通知) を参照してください
 全フィールドの実値が必要な場合は、別途 VESC の値取得コマンドと CAN 分割通信の
 実装が必要です。上流 msg の流用だけで取得できるデータが増えるわけではありません。
 
@@ -145,11 +186,13 @@ C++ の共通ヘッダは `vesc_can_driver/...`、namespace は `vesc_can_driver
 
 | 旧 API | 移行先 |
 |---|---|
-| ActuatorTarget / ActuatorTargetArray | ~/commands の MotorCommands、names にモータ名、values に指令値 |
-| ~/motors/<motor_name>/command の Float64 | ~/commands の MotorCommands、names: [motor_name]、values: [旧 data] |
-| ~/joint_commands の JointState | ~/commands の MotorCommands、モータ名ごとに position / velocity から values へ移す |
+| ActuatorTarget / ActuatorTargetArray | /vesc/commands の VescCommandArray、logical_id を motor_id へ移し、配列の stamp に生成時刻 |
+| ~/motors/<motor_name>/command の Float64 | VescCommandArray の要素 1 個、設定の logical_id と旧 data を指定 |
+| ~/joint_commands の JointState | VescCommandArray、関節名を logical_id に対応付け、position / velocity から value へ移す |
+| ~/commands の MotorCommands | VescCommandArray、names を設定の logical_id に対応付け、values を各 value へ移す |
+| vesc_can_driver/msg/VescCommandArray | vesc_can_msgs/msg/VescCommandArray に移動、各 mode を削除し、配列の stamp に生成時刻を入れる |
 | ActuatorState / ActuatorStateArray | ~/motors/<motor_name>/state の VescStateStamped。関節単位は ros2_control の state interface / joint_state_broadcaster を使用 |
-| logical_id | motors の関節名で指令先を選ぶ。実機の CAN ID は controller_id に指定 |
+| logical_id | 通常ノードの YAML で復活、0〜255。ros2_control は関節名を使用 |
 | state_array_publish_period_ms | state_publish_period_ms |
 | target_topic / target_array_topic / state_topic / state_array_topic | 新トピックへの ROS remapping |
 

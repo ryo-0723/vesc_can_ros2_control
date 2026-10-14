@@ -46,7 +46,7 @@ CAN の encode/decode・通常ノードは `vesc_can_driver`、hardware plugin �
 
 公開 API は安定化が必要です
 通常ノードの状態は同梱した上流 `vesc_msgs`、指令は
-`vesc_can_driver/msg/MotorCommands` を使います。[移行案内](messages.md) に
+独立した `vesc_can_msgs/msg/VescCommandArray` を使います。[移行案内](messages.md) に
 型・単位・未取得値を記録しています。`vesc_msgs` は f1tenth 管理のコミュニティパッケージです。
 
 abu2027 側へ導入するときは独立リポジトリを vcs の .repos ファイルや submodule などで

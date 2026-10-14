@@ -1,5 +1,7 @@
 #include "vesc_can_driver/vesc_state.hpp"
 
+#include <utility>
+
 namespace vesc_can_driver
 {
 vesc_msgs::msg::VescState make_vesc_state(
@@ -36,18 +38,51 @@ vesc_msgs::msg::VescState make_vesc_state(
   msg.avg_vd = kUnknownValue;
   msg.avg_vq = kUnknownValue;
   msg.distance_traveled = kUnavailableVescInteger;
-  msg.fault_code = kUnavailableVescInteger;
+  msg.fault_code =
+    feedback_fresh(state.fault_at, now, timeout) ? state.fault_code : kUnavailableVescInteger;
   return msg;
 }
 MotorStatePublisher::MotorStatePublisher(
-  rclcpp::Node &node, const std::vector<MotorConfig> &configs)
-  : configs_(configs)
+  rclcpp::Node &node, const std::vector<MotorConfig> &configs, const std::string &error_topic)
+  : configs_(configs), clock_(node.get_clock()), node_name_(node.get_fully_qualified_name())
 {
+  error_pub_ = node.create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+    error_topic, rclcpp::QoS(1).reliable().transient_local());
   pubs_.reserve(configs_.size());
   for (const auto &cfg : configs_) {
     pubs_.push_back(node.create_publisher<vesc_msgs::msg::VescStateStamped>(
       "~/motors/" + cfg.name + "/state", 10));
   }
+}
+
+void MotorStatePublisher::publish_error(const DriverFault &fault)
+{
+  diagnostic_msgs::msg::DiagnosticArray msg;
+  msg.header.stamp = clock_->now();
+  for (const auto &cfg : configs_) {
+    if (fault.device_fault && fault.device_fault->controller_id != cfg.controller_id) {
+      continue;
+    }
+    diagnostic_msgs::msg::DiagnosticStatus status;
+    status.level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+    status.name = node_name_ + "/" + cfg.name;
+    status.hardware_id = "vesc_can_id_" + std::to_string(cfg.controller_id);
+    status.message = fault.reason;
+    diagnostic_msgs::msg::KeyValue field;
+    field.key = "source";
+    field.value = fault.device_fault ? "vesc" : "driver";
+    status.values.push_back(field);
+    field.key = "controller_id";
+    field.value = std::to_string(cfg.controller_id);
+    status.values.push_back(field);
+    if (fault.device_fault) {
+      field.key = "fault_code";
+      field.value = std::to_string(fault.device_fault->code);
+      status.values.push_back(field);
+    }
+    msg.status.push_back(std::move(status));
+  }
+  error_pub_->publish(msg);
 }
 
 void MotorStatePublisher::publish(

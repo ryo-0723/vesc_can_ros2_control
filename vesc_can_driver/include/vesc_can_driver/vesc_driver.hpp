@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <numbers>
@@ -85,7 +86,9 @@ struct MotorState
   double adc_1_v{kUnknownValue};
   double adc_2_v{kUnknownValue};
   double adc_3_v{kUnknownValue};
-  double ppm{kUnknownValue};  // normalized PPM input, dimensionless
+  double ppm{kUnknownValue};    // normalized PPM input, dimensionless
+  std::int32_t fault_code{-1};  // -1: unknown, 0: confirmed healthy, >0: VESC fault
+  std::optional<TimePoint> fault_at;
   // nullopt means not received; a received timestamp may legitimately be TimePoint{}.
   std::optional<TimePoint> status1_at;
   std::optional<TimePoint> status2_at;
@@ -123,7 +126,7 @@ bool feedback_fresh(
 /// @brief 指令値の有限性と，選択したモードの範囲を検査
 bool command_is_valid(const MotorConfig &cfg, double value);
 
-/// @brief モードに必要な STATUS の鮮度と位置範囲から準備状態を判定
+/// @brief 既知の本体故障・必要な STATUS の鮮度・位置範囲から準備状態を判定
 bool state_ready(const MotorConfig &cfg, const MotorState &state, TimePoint now);
 
 /// @brief 状態更新と 4 モードの制御判断
@@ -152,27 +155,34 @@ public:
   /// @return 状態を更新した場合は true
   bool receive(const can_msgs::msg::Frame &frame, TimePoint now);
 
-  /// @brief 全台のフィードバックが最新で，位置条件を満たすか判定
+  /// @brief 登録 ID の故障コードを更新し，非ゼロなら全台を異常停止
+  /// @note コード 0 の受信で PC 側の異常停止は解除しない
+  bool receive_fault(const protocol::FaultCode &fault, TimePoint now);
+
+  /// @brief 全台に既知の本体故障がなく，フィードバックと位置条件を満たすか判定
   bool ready(TimePoint now) const;
 
   /// @brief 全台の準備を確認し，PC 側で動作指令を許可
   /// @return 有効化に成功した場合は true
   /// @note 成功時に旧指令と異常を解除，CAN 有効化パケットは送らない
-  bool enable(TimePoint now);
+  bool activate(TimePoint now);
 
   /// @brief 動作指令を無効にし，保存した指令をリセット
-  void disable();
+  void deactivate();
+
+  /// @brief 再起動する 1 台の状態と，全台の旧指令・PC 側の異常をリセット
+  bool reset(std::size_t motor_idx);
 
   /// @brief 全台を無効化し，異常停止の理由を保持
   void stop_on_error(const std::string &reason);
 
   /// @brief 動作指令が許可されているか
-  bool enabled() const
+  bool active() const
   {
-    return enabled_;
+    return active_;
   }
 
-  /// @brief 再有効化が必要な異常停止状態か
+  /// @brief 復旧操作が必要な異常停止状態か
   bool faulted() const
   {
     return faulted_;
@@ -219,9 +229,9 @@ private:
   std::vector<MotorConfig> configs_;
   std::vector<MotorState> states_;
   std::vector<Command> cmds_;
-  bool enabled_{false};
+  bool active_{false};
   bool faulted_{false};
-  TimePoint enabled_at_{};
+  TimePoint active_at_{};
   std::string fault_reason_;
 };
 
@@ -230,6 +240,15 @@ struct TransportOptions
   std::string tx_topic{"/can/tx"};
   std::string rx_topic{"/can/rx"};
   std::chrono::milliseconds send_period{10};
+  std::uint8_t host_id{254};
+  std::chrono::milliseconds fault_period{100};  // 0 disables fault queries
+  bool auto_activate{false};  // standalone starts on fresh input; hardware uses lifecycle
+};
+
+struct DriverFault
+{
+  std::string reason;
+  std::optional<protocol::FaultCode> device_fault;  // absent for PC/transport errors
 };
 
 /// @brief 専用 executor で CAN の周期送受信を管理
@@ -239,10 +258,11 @@ class CanTransport
 public:
   /// @brief CAN トピックと周期タイマーを作成する，executor は start() で起動
   /// @param configs モータ設定（登録順）
-  /// @param opts トピック名と送信周期
+  /// @param opts トピック名・送信周期・故障問い合わせの応答先 ID と周期
   /// @param can_node 通信専用 executor に登録するノード
-  CanTransport(
-    std::vector<MotorConfig> configs, TransportOptions opts, rclcpp::Node::SharedPtr can_node);
+  /// @param on_fault 異常を検出した処理から呼ぶ通知関数，状態ロック外で実行
+  CanTransport(std::vector<MotorConfig> configs, TransportOptions opts,
+    rclcpp::Node::SharedPtr can_node, std::function<void(const DriverFault &)> on_fault = {});
 
   /// @brief shutdown() を呼び，専用スレッドと通信処理を終了
   ~CanTransport();
@@ -267,10 +287,19 @@ public:
 
   /// @brief フィードバックを確認して有効化し，成功時に旧指令と異常を解除
   /// @return 有効化に成功した場合は true
-  bool enable();
+  bool activate();
 
   /// @brief 動作指令を無効化し，以後の送信をゼロ電流に切り替える
-  void disable();
+  void deactivate();
+
+  /// @brief 指定モータの再起動を CAN executor へ要求する
+  /// @return 要求受理で true，添字不正・終了済み・要求待ち・再起動待機中は false
+  /// @note hardware の動作中は受理しない，旧指令は全台分を破棄
+  bool reboot(std::size_t motor_idx);
+
+  /// @brief 通常のコールバックから理由付きで異常停止し，初回の異常を即時通知
+  /// @note ロックを取得するため ros2_control の read/write では request_stop() を使用
+  void stop_on_error(const std::string &reason);
 
   /// @brief ロックを待たずに全台の異常停止を要求する
   void request_stop() noexcept
@@ -280,9 +309,9 @@ public:
   }
 
   /// @brief 通信側で保持する動作許可状態を返す
-  bool enabled() const
+  bool active() const
   {
-    return enabled_.load();
+    return active_.load();
   }
 
   /// @brief 通信側で保持する異常停止状態を返す
@@ -326,21 +355,36 @@ private:
   /// @brief 停止要求を反映し，ROS 時刻を付けて CAN フレームを配信
   void publish_frames();
 
+  /// @brief 登録モータへ故障コードを問い合わせる，停止中も継続
+  void poll_faults();
+
+  /// @brief STATUS または要求済みの故障応答を処理し，異常を即時通知
+  void receive_frame(const can_msgs::msg::Frame &frame);
+
+  /// @brief 状態ロック外で異常通知を呼び，通知側の例外を記録する
+  void notify_fault(const DriverFault &fault);
+
   DriverCore core_;
   TransportOptions opts_;
   rclcpp::Node::SharedPtr can_node_;
+  std::function<void(const DriverFault &)> on_fault_;
   rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr tx_pub_;
   rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr rx_sub_;
   rclcpp::TimerBase::SharedPtr send_timer_;
+  rclcpp::TimerBase::SharedPtr fault_timer_;
+  // Only the dedicated CAN executor accesses pending query times.
+  std::vector<std::optional<TimePoint>> fault_requests_;
+  std::vector<TimePoint> rx_after_;
   rclcpp::executors::SingleThreadedExecutor can_exec_;
   std::thread exec_thread_;
   std::mutex state_mutex_;
   std::condition_variable feedback_cv_;
   std::vector<PendingCommand> pending_cmds_;
+  std::optional<std::size_t> reboot_idx_;
   std::vector<can_msgs::msg::Frame> cmd_frames_;
   std::atomic<bool> shutdown_started_{false};
   std::atomic<bool> stop_requested_{true};
-  std::atomic<bool> enabled_{false};
+  std::atomic<bool> active_{false};
   std::atomic<bool> faulted_{false};
   std::atomic<bool> fault_requested_{false};
 };

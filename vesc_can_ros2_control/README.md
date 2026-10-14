@@ -107,10 +107,22 @@ state interface を直接読むオドメトリ controller は 100 Hz の更新�
 namespace を付けた場合はこの先頭に追加されます。電流・温度・電圧などの生値と単位は
 通常ノードと同じ [メッセージ対応表](../docs/messages.md) に従います。
 
+ドライバが異常を検出すると、周期の状態配信とは別に `/vesc/event` へ
+DiagnosticArray を即時配信します
+hardware の `error_topic` param で配信先を変更できます
+read/write は ROS 通知を配信せず、CAN executor が異常を処理した直後に通知します
+VESC 本体の fault_code は CAN selective 問い合わせで取得します
+hardware の host_can_id（既定 254）と fault_poll_period_ms（既定 100）で設定します
+受信時に /vesc/event へ source=vesc / controller_id / fault_code を載せて通知し、全台停止します
+hardware の停止保持は controller_manager の lifecycle 復旧で解除します
+activate / deactivate は PC 内部の状態で、VESC 有効化・無効化パケットは送りません
+VescState.fault_code は未受信・期限切れに -1 を返します
+応答先 ID と CAN ブリッジの受信フィルタは [ドライバの説明](../vesc_can_driver/README.md#即時の異常通知) を確認してください
+
 ## テスト
 
 このパッケージでは hardware 設定の検査と、実際の controller_manager からの
 plugin 読み込み、駆動・操舵、フィードバック途絶時の全台停止を確認します。
 統合テストでは、別の CAN トピックを使う通常ノード・模擬 VESC も起動し、
-通常ノードの MotorCommands 指令と vesc_msgs の状態出力を確認します
+通常ノードの VescCommandArray 指令と vesc_msgs の状態出力を確認します
 通常ノードを hardware component の通信経路として使う構成ではありません

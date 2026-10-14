@@ -14,6 +14,9 @@ constexpr std::uint32_t kExtendedCanIdMask = 0x1FFFFFFF;
 constexpr std::uint32_t kSetCurrentId = 1;
 constexpr std::uint32_t kSetRpmId = 3;
 constexpr std::uint32_t kSetPositionId = 4;
+constexpr std::uint32_t kProcessShortBufferId = 8;
+constexpr std::uint8_t kGetValuesSelectiveId = 50;
+constexpr std::uint8_t kCommRebootId = 29;
 // Native CAN STATUS1-6 layout verified against VESC firmware release_6_06,
 // commit 94b305ec124b67b0161f2d3d85c4d5b35e48edc5 (comm/comm_can.c, datatypes.h).
 constexpr std::uint32_t kStatus1Id = 9;
@@ -22,6 +25,28 @@ constexpr std::uint32_t kStatus3Id = 15;
 constexpr std::uint32_t kStatus4Id = 16;
 constexpr std::uint32_t kStatus5Id = 27;
 constexpr std::uint32_t kStatus6Id = 58;
+
+struct FaultCode
+{
+  std::uint8_t controller_id{};
+  std::uint8_t code{};
+};
+
+/// @brief CAN の short buffer で VESC 故障コードだけを問い合わせる
+/// @param host_id 応答先となる PC の CAN ID（他の機器と重複不可）
+/// @throws std::invalid_argument ID が 255 または送受信 ID が同一
+can_msgs::msg::Frame make_fault_request(std::uint8_t controller_id, std::uint8_t host_id);
+
+/// @brief 指定 VESC の COMM_REBOOT を short buffer で送るフレームを生成
+/// @param host_id PC の CAN ID
+/// @return 拡張フレーム（DLC=3），応答は要求しない
+/// @throws std::invalid_argument ID が 255 または送受信 ID が同一
+can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id, std::uint8_t host_id);
+
+/// @brief 故障コードのみを含む selective 応答を検査して読み取る
+/// @note CAN ID の下位 byte は宛先，送信元 VESC ID は data[0]
+/// @return 正しい形式なら true，不正フレームでは出力を変更しない
+bool decode_fault_reply(const can_msgs::msg::Frame &frame, std::uint8_t host_id, FaultCode &fault);
 
 struct Status1
 {

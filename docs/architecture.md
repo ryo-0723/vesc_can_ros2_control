@@ -4,7 +4,8 @@
 
 | パッケージ | 内容 | 他のパッケージとの関係 |
 |---|---|---|
-| vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノードと指令 msg、模擬 VESC | vesc_msgs を使用。ros2_control への依存なし |
+| vesc_can_msgs | 論理 ID と指令値、生成時刻を持つ配列の指令 msg | ドライバ・ros2_control・vesc_msgs への依存なし |
+| vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC、異常通知 | vesc_can_msgs / vesc_msgs を使用。ros2_control への依存なし |
 | vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の driver / state を使用 |
 | vesc_msgs | 上流由来の ROS メッセージ | 両ドライバとは独立したインターフェース定義 |
 
@@ -34,10 +35,11 @@ flowchart LR
   Z --> T
   T --> H
   T --> N
+  T --> E["/vesc/event: DiagnosticArray"]
 ```
 
 `DriverCore::receive()` は制御の無効・異常停止中にも状態を更新します。
-`ready` / `enable` はドライバのホスト側の制御状態で、CAN 有効化パケットではありません。
+`ready` / `activate` はドライバのホスト側の制御状態で、CAN 有効化パケットではありません。
 パケットの encode/decode は protocol を直接呼び出せます。
 
 通常ノードとプラグインはどちらかを選びます。同じ ID を両方から制御しません。
@@ -52,10 +54,12 @@ VescSystem は実行ファイルではなく、controller_manager のプロセ�
 2 つを持ちます。メイン executor と CAN executor がそれぞれ動きます。
 「ROS グラフ上のノードが 1 つ」という構成ではありません。
 
-上位ノード向けの指令入口は `~/commands` の MotorCommands 1 つです
-メッセージの names にモータ名、values に各モードの指令値を入れます
+上位ノード向けの指令入口は `/vesc/commands` の VescCommandArray 1 つです
+各要素に論理 motor_id と float32 の value、配列全体に生成時刻 stamp を入れます
+モードは起動時の YAML から決まり、指令や起動後のパラメータ変更で切り替えません
+上位ノードは vesc_can_msgs にだけ依存して指令型を使えます
 状態は `~/motors/<motor_name>/state` から購読します
-モータ名と VESC の機器 ID の対応は設定に集約し、上位ノードには CAN ID を要求しません
+モータ名・logical_id・VESC の controller_id の対応は設定に集約し、上位ノードには CAN ID を要求しません
 ros2_control とモータ名を揃えれば、両入口で同じ関節を識別できます
 
 ## 制御周期との境界
@@ -67,10 +71,28 @@ read は状態のコピー、write は最新指令を共有領域へ渡す処理
 延期します。鮮度期限の検査は続けるため、無期限に古い指令を使い続けません。
 
 CAN executor が一定周期で最新指令を取り出し、変換・制限・異常検査・Frame 送信を
-行います。通常ノードでは MotorCommands のモータ名を内部添字に対応付け、指定したモータの
+行います。通常ノードでは VescCommandArray の論理 ID を内部添字に対応付け、指定したモータの
 最新指令を受け渡します。hardware では全関節の指令をまとめて受け渡します。
 mailbox はモータごとに最新指令だけを保持します。
-受信コールバックは同じ executor で STATUS を状態へ反映します。
+配列の stamp は送信側の生成時刻で、指令期限は受信側の単調時刻から判定します
+受信コールバックは同じ executor で STATUS と故障コードを状態へ反映します
+故障問い合わせは fault_poll_period_ms（既定 100 ms）の別タイマーで実行します
+要求・応答は short buffer の 1 フレームずつで、動作指令の 100 Hz 周期とは独立しています
+
+異常通知は CanTransport の on_fault を状態ロック外で呼び、共通の MotorStatePublisher が
+DiagnosticArray を error_topic（既定 /vesc/event）へ配信します
+通常のコールバックからの不正指令・CAN エラーフレーム・本体の故障応答は、検出した処理から通知します
+DriverFault に本体の ID と故障番号を持たせ、PC 側の異常と区別します
+本体の故障コードが変化したときは、既に停止中でも通知します
+ros2_control の read/write は通知を配信せず、異常停止を atomic に要求します
+CAN 周期が要求を処理し、状態や期限から検出した異常も同じ処理の直後に通知します
+通常ノードの異常停止は reboot 要求で解除し、同じ異常の毎周期の通知は行いません
+通常の動作開始は fresh な指令と必要な STATUS が揃った時に CAN executor が処理します
+再起動は論理 ID の指定を内部添字へ変換し、CAN executor で停止フレームの後に 1 回送信します
+対象の受信状態はクリアし、500 ms の待機後に届く状態を使用します
+最後の異常イベントを TransientLocal で保持しますが、イベントは現在の有効状態ではありません
+transport の shutdown / join を完了してから通知 publisher を破棄します
+CAN 周期を待つ間に hardware が error lifecycle へ移った場合も、終了処理で未処理の異常を通知します
 
 std::thread は join してから状態を破棄します。自分の executor だけを cancel し、
 controller_manager の executor を停止しません。C++ の例外は起動・設定・専用
