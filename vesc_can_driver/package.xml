@@ -9,7 +9,6 @@
   <url type="bugtracker">https://github.com/ryo-0723/vesc_can_ros2_control/issues</url>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>can_msgs</depend>
-  <depend>diagnostic_msgs</depend>
   <depend>rclcpp</depend>
   <depend>rcl_interfaces</depend>
   <depend>vesc_can_msgs</depend>

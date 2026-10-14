@@ -1,12 +1,14 @@
 #include "vesc_can_driver/vesc_state.hpp"
 
-#include <utility>
+#include <algorithm>
+#include <array>
+#include <string_view>
 
 namespace vesc_can_driver
 {
 namespace
 {
-/// @brief 確保済みの VescState を上書きし，名前の文字列領域を再利用する
+/// @brief 事前確保した状態へ変換済みの速度・角度と監視値を上書きする
 void fill_state(const MotorConfig &cfg, const MotorState &state, TimePoint now,
   vesc_can_msgs::msg::VescState &msg)
 {
@@ -17,26 +19,43 @@ void fill_state(const MotorConfig &cfg, const MotorState &state, TimePoint now,
   const bool status_4_fresh = feedback_fresh(state.status4_at, now, timeout);
   const bool status_5_fresh = feedback_fresh(state.status5_at, now, timeout);
 
-  msg.motor_name = cfg.name;
-  msg.controller_id = cfg.controller_id;
-  msg.erpm = status_1_fresh ? state.electrical_rpm : kUnknownValue;
-  msg.motor_current_a = status_1_fresh ? state.motor_current_a : kUnknownValue;
-  msg.duty_cycle = status_1_fresh ? state.duty_cycle : kUnknownValue;
-  msg.charge_drawn_ah = status_2_fresh ? state.charge_drawn_ah : kUnknownValue;
-  msg.charge_regen_ah = status_2_fresh ? state.charge_regen_ah : kUnknownValue;
-  msg.energy_drawn_wh = status_3_fresh ? state.energy_drawn_wh : kUnknownValue;
-  msg.energy_regen_wh = status_3_fresh ? state.energy_regen_wh : kUnknownValue;
-  msg.temp_fet_c = status_4_fresh ? state.temperature_fet_c : kUnknownValue;
-  msg.temp_motor_c = status_4_fresh ? state.temperature_motor_c : kUnknownValue;
-  msg.input_current_a = status_4_fresh ? state.input_current_a : kUnknownValue;
-  msg.pid_pos_deg = status_4_fresh ? state.pid_pos_deg : kUnknownValue;
-  msg.input_voltage_v = status_5_fresh ? state.input_voltage_v : kUnknownValue;
-  msg.tachometer_counts = state.tachometer_counts;
-  msg.tachometer_fresh = status_5_fresh;
+  msg.motor_id = cfg.motor_id;
+  msg.velocity_rad_s = status_1_fresh ? state.vel_rad_s : kUnknownValue;
+  msg.motor_current_a = static_cast<float>(status_1_fresh ? state.motor_current_a : kUnknownValue);
+  msg.duty_cycle = static_cast<float>(status_1_fresh ? state.duty_cycle : kUnknownValue);
+  msg.charge_drawn_ah = static_cast<float>(status_2_fresh ? state.charge_drawn_ah : kUnknownValue);
+  msg.charge_regen_ah = static_cast<float>(status_2_fresh ? state.charge_regen_ah : kUnknownValue);
+  msg.energy_drawn_wh = static_cast<float>(status_3_fresh ? state.energy_drawn_wh : kUnknownValue);
+  msg.energy_regen_wh = static_cast<float>(status_3_fresh ? state.energy_regen_wh : kUnknownValue);
+  msg.temp_fet_c = static_cast<float>(status_4_fresh ? state.temperature_fet_c : kUnknownValue);
+  msg.temp_motor_c = static_cast<float>(status_4_fresh ? state.temperature_motor_c : kUnknownValue);
+  msg.input_current_a = static_cast<float>(status_4_fresh ? state.input_current_a : kUnknownValue);
+  msg.pid_pos_rad = status_4_fresh ? deg_to_pos(cfg, state.pid_pos_deg) : kUnknownValue;
+  msg.input_voltage_v = static_cast<float>(status_5_fresh ? state.input_voltage_v : kUnknownValue);
   msg.position_rad = status_5_fresh ? tacho_to_pos(cfg, state.tachometer_counts) : kUnknownValue;
   msg.fault_code =
     feedback_fresh(state.fault_at, now, timeout) ? state.fault_code : kUnknownFaultCode;
 }
+/// @brief VESC 6.06 の故障コードを名称付きのエラー文字列へ変換する
+std::string event_message(const DriverFault &fault)
+{
+  if (!fault.device_fault) {
+    return fault.reason;
+  }
+  // Official mc_fault_code order, release_6_06 (94b305ec), datatypes.h:132-163.
+  constexpr std::array<std::string_view, 30> names{"NONE", "OVER_VOLTAGE", "UNDER_VOLTAGE", "DRV",
+    "ABS_OVER_CURRENT", "OVER_TEMP_FET", "OVER_TEMP_MOTOR", "GATE_DRIVER_OVER_VOLTAGE",
+    "GATE_DRIVER_UNDER_VOLTAGE", "MCU_UNDER_VOLTAGE", "BOOTING_FROM_WATCHDOG_RESET", "ENCODER_SPI",
+    "ENCODER_SINCOS_BELOW_MIN_AMPLITUDE", "ENCODER_SINCOS_ABOVE_MAX_AMPLITUDE", "FLASH_CORRUPTION",
+    "HIGH_OFFSET_CURRENT_SENSOR_1", "HIGH_OFFSET_CURRENT_SENSOR_2", "HIGH_OFFSET_CURRENT_SENSOR_3",
+    "UNBALANCED_CURRENTS", "BRK", "RESOLVER_LOT", "RESOLVER_DOS", "RESOLVER_LOS",
+    "FLASH_CORRUPTION_APP_CFG", "FLASH_CORRUPTION_MC_CFG", "ENCODER_NO_MAGNET",
+    "ENCODER_MAGNET_TOO_STRONG", "PHASE_FILTER", "ENCODER_FAULT", "LV_OUTPUT_FAULT"};
+  const auto code = fault.device_fault->code;
+  const auto name = code < names.size() ? names[code] : std::string_view("UNKNOWN");
+  return "VESC fault_code=" + std::to_string(code) + " (" + std::string(name) + ")";
+}
+
 }  // namespace
 
 vesc_can_msgs::msg::VescState make_vesc_state(
@@ -50,13 +69,13 @@ vesc_can_msgs::msg::VescState make_vesc_state(
 MotorStatePublisher::MotorStatePublisher(rclcpp::Node &node,
   const std::vector<MotorConfig> &configs, const std::string &error_topic,
   const std::string &state_topic)
-  : configs_(configs), clock_(node.get_clock()), node_name_(node.get_fully_qualified_name())
+  : configs_(configs)
 {
-  error_pub_ = node.create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
-    error_topic, rclcpp::QoS(1).reliable().transient_local());
+  error_pub_ = node.create_publisher<vesc_can_msgs::msg::VescEvent>(error_topic,
+    rclcpp::QoS(std::max<std::size_t>(1, configs_.size())).reliable().transient_local());
   state_msg_.states.resize(configs_.size());
   for (std::size_t idx = 0; idx < configs_.size(); ++idx) {
-    state_msg_.states[idx].motor_name = configs_[idx].name;
+    state_msg_.states[idx].motor_id = configs_[idx].motor_id;
   }
   if (!state_topic.empty()) {
     array_pub_ = node.create_publisher<vesc_can_msgs::msg::VescStateArray>(state_topic, 1);
@@ -71,32 +90,18 @@ MotorStatePublisher::MotorStatePublisher(rclcpp::Node &node,
 
 void MotorStatePublisher::publish_error(const DriverFault &fault)
 {
-  diagnostic_msgs::msg::DiagnosticArray msg;
-  msg.header.stamp = clock_->now();
+  if (fault.device_fault && fault.device_fault->code == 0) {
+    return;
+  }
+  vesc_can_msgs::msg::VescEvent msg;
+  msg.message = event_message(fault);
   for (const auto &cfg : configs_) {
     if (fault.device_fault && fault.device_fault->controller_id != cfg.controller_id) {
       continue;
     }
-    diagnostic_msgs::msg::DiagnosticStatus status;
-    status.level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-    status.name = node_name_ + "/" + cfg.name;
-    status.hardware_id = "vesc_can_id_" + std::to_string(cfg.controller_id);
-    status.message = fault.reason;
-    diagnostic_msgs::msg::KeyValue field;
-    field.key = "source";
-    field.value = fault.device_fault ? "vesc" : "driver";
-    status.values.push_back(field);
-    field.key = "controller_id";
-    field.value = std::to_string(cfg.controller_id);
-    status.values.push_back(field);
-    if (fault.device_fault) {
-      field.key = "fault_code";
-      field.value = std::to_string(fault.device_fault->code);
-      status.values.push_back(field);
-    }
-    msg.status.push_back(std::move(status));
+    msg.motor_id = cfg.motor_id;
+    error_pub_->publish(msg);
   }
-  error_pub_->publish(msg);
 }
 
 void MotorStatePublisher::publish(

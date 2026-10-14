@@ -153,12 +153,13 @@ void validate_configs(const std::vector<MotorConfig> &configs)
     throw std::invalid_argument("At least one motor is required");
   }
   std::set<std::string> names;
+  std::set<std::uint8_t> motor_ids;
   std::set<std::uint8_t> ids;
   for (const auto &cfg : configs) {
     validate_config(cfg);
     if (cfg.name.empty() || !names.insert(cfg.name).second ||
-        !ids.insert(cfg.controller_id).second) {
-      throw std::invalid_argument("Motor names and controller IDs must be unique");
+        !motor_ids.insert(cfg.motor_id).second || !ids.insert(cfg.controller_id).second) {
+      throw std::invalid_argument("Motor names, logical IDs and CAN IDs must be unique");
     }
   }
 }

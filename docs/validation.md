@@ -614,3 +614,39 @@ colcon test-result は実行単位 5 件を含む **73 tests, 0 errors, 0 failur
 これは模擬 CAN の動作確認で、従来の個別配信に対する CPU・帯域の比較測定ではありません
 ビルド中に build.make の時刻が 1.7 秒先を示す Clock skew 警告がありましたが、全ターゲットのコンパイル・リンクと検証は完了しました
 実 CAN バス・実機・Zenoh pico の性能は未検証です
+
+## 状態・エラーの ID 統一とメッセージ整理の検証
+
+2026-10-15、指令・状態・エラーの識別を論理 motor_id に統一しました
+通常ノードは既存 YAML の logical_id、hardware は URDF の各 joint の必須 logical_id を使います
+論理 ID は 0〜255 で一意にし、CAN の controller_id は別に管理します
+/vesc/event は VescEvent（uint8 motor_id / string message）の 2 項目へ変更しました
+本体故障は名称と番号を持つ文字列、PC 側の停止は影響する全 ID に停止理由を通知します
+正常コード 0 はイベントを配信しません
+
+VescState の速度は velocity_rad_s、PID 角度は pid_pos_rad、積算角は position_rad にまとめました
+速度・角度は関節単位の float64、電流・duty・電荷・電力量・温度・電圧は float32 です
+公開する生の ERPM・タコメータ・鮮度 bool・モータ名・CAN ID は削除しました
+未受信・期限切れの浮動値は NaN を使い、内部計算と hardware state interface の double は維持します
+
+ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=184 で **70 ケースが成功** しました
+colcon test-result は実行単位 5 件を含む **75 tests, 0 errors, 0 failures, 0 skipped** です
+内訳は protocol/core 34、transport 8、state_conversion/publisher 7、hardware 設定 9、統合 11、終了コード 1 です
+
+- 通常ノードと hardware で CAN ID と異なる論理 ID を配信し、指令と状態・エラーが同じ ID になることを確認
+- URDF の logical_id の欠落・重複・範囲外・負数・小数を拒否し、255 は論理 ID として使用できることを確認
+- 速度・PID 角度・積算角の方向と減速比、欠測・STATUS ごとの期限切れ、int32 境界の変換精度を確認
+- 監視値の float32 化と、内部・hardware state の double の保持を確認
+- 故障番号 4 / 5 / 6 / 29 の名称、未知の 255 の UNKNOWN 表示、正常応答の通知抑制を確認
+- 本体故障は該当 ID、PC 側の全台停止は全 ID に通知し、遅れて購読しても全台停止の ID を取得できることを確認
+- 状態周期が 2000 ms の構成で、指令エラー 1.8 ms、CAN エラー 1.4 ms、本体故障 81.1 ms の通知を確認
+- インストール済み CMake target の外部利用、状態・配列・エラー msg の C++ / Python シリアライズを確認
+
+本体の故障は 100 ms 周期の問い合わせで取得するため、受信後の通知時間に加えて問い合わせ待ちが生じます
+周期の状態と JointState は独立したタイマーなので、統合テストでは両方の更新後の値を待って比較します
+2 台の VescStateArray の CDR シリアライズは 186 bytes でした（DDS 等の通信ヘッダは含みません）
+通常ノードは状態配列 50.0 Hz、CAN 指令 100.0〜100.1 Hz、5 台の hardware も状態約 50 Hz・CAN 約 100 Hz でした
+追加の state_publish_period_ms=2 の検証では、2 台の状態配列 499.9 Hz、各モータの CAN 指令 100.0 Hz を確認しました
+共有ホストで controller_manager に約 29.5 ms の overrun が 1 回あり、周期の保証や実機性能の測定ではありません
+ドライバ単体と hardware plugin のビルド、C++ / Python の書式検査も通過しました
+実 CAN バス・実機・Zenoh pico の性能は未検証です

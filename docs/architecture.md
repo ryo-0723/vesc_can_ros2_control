@@ -4,7 +4,7 @@
 
 | パッケージ | 内容 | 他のパッケージとの関係 |
 |---|---|---|
-| vesc_can_msgs | 指令 msg、時刻付きの配列指令とモータ状態 msg、再起動 srv | ドライバ・ros2_control への依存なし |
+| vesc_can_msgs | 指令 msg、時刻付きの配列指令とモータ状態 msg、エラー msg、再起動 srv | ドライバ・ros2_control への依存なし |
 | vesc_can_driver | CAN encode/decode、共通状態・単位変換、通信、通常ノード、模擬 VESC、異常通知 | vesc_can_msgs を使用、ros2_control への依存なし |
 | vesc_can_ros2_control | SystemInterface、control 用 launch、URDF と controller 設定例 | vesc_can_driver の driver / state を使用 |
 
@@ -34,7 +34,7 @@ flowchart LR
   Z --> T
   T --> H
   T --> N
-  T --> E["/vesc/event: DiagnosticArray"]
+  T --> E["/vesc/event: VescEvent"]
 ```
 
 `DriverCore::receive()` は制御の無効・異常停止中にも状態を更新します。
@@ -56,11 +56,13 @@ VescSystem は実行ファイルではなく、controller_manager のプロセ�
 上位ノード向けの指令入口は `/vesc/commands` の VescCommandArray 1 つです
 各要素に論理 motor_id と float32 の value、配列全体に生成時刻 stamp を入れます
 モードは起動時の YAML から決まり、指令や起動後のパラメータ変更で切り替えません
-上位ノードは vesc_can_msgs にだけ依存して指令・状態・再起動の型を使えます
-通常ノードの状態は `/vesc/state` の VescStateArray から購読し、motor_name で識別します
+上位ノードは vesc_can_msgs にだけ依存して指令・状態・エラー・再起動の型を使えます
+通常ノードの状態は `/vesc/state` の VescStateArray から購読し、motor_id で識別します
 hardware の状態は `~/motors/<joint名>/state` の VescState で配信します
 モータ名・logical_id・VESC の controller_id の対応は設定に集約し、上位ノードには CAN ID を要求しません
-ros2_control とモータ名を揃えれば、両入口で同じ関節を識別できます
+通常ノードは YAML、hardware は URDF の joint に logical_id を指定します
+同じモータの logical_id を揃えれば、両入口の状態・エラーを同じ motor_id で識別できます
+速度と角度は関節単位の float64、監視値は float32 で配信し、内部の double 計算は維持します
 全モードの VescState.position_rad は STATUS5 から換算した積算関節角 [rad] です
 車輪など位置制御以外の position state interface も同じ tacho_to_pos() を使います
 位置制御の position state interface は STATUS4 の PID 角度を維持します
@@ -94,9 +96,11 @@ mailbox はモータごとに最新指令だけを保持します。
 要求・応答は short buffer の 1 フレームずつで、動作指令の 100 Hz 周期とは独立しています
 
 異常通知は CanTransport の on_fault を状態ロック外で呼び、共通の MotorStatePublisher が
-DiagnosticArray を error_topic（既定 /vesc/event）へ配信します
+VescEvent を error_topic（既定 /vesc/event）へ配信します
 通常のコールバックからの不正指令・CAN エラーフレーム・本体の故障応答は、検出した処理から通知します
 DriverFault に本体の ID と故障番号を持たせ、PC 側の異常と区別します
+公開する項目は論理 motor_id とエラー文字列 message のみです
+本体故障は該当 ID、PC 側の全台停止は全 ID に 1 件ずつ通知します
 本体の故障コードが変化したときは、既に停止中でも通知します
 ros2_control の read/write は通知を配信せず、異常停止を atomic に要求します
 CAN 周期が要求を処理し、状態や期限から検出した異常も同じ処理の直後に通知します
@@ -104,7 +108,7 @@ CAN 周期が要求を処理し、状態や期限から検出した異常も同�
 通常の動作開始は fresh な指令と必要な STATUS が揃った時に CAN executor が処理します
 再起動は論理 ID の指定を内部添字へ変換し、CAN executor で停止フレームの後に 1 回送信します
 対象の受信状態はクリアし、500 ms の待機後に届く状態を使用します
-最後の異常イベントを TransientLocal で保持しますが、イベントは現在の有効状態ではありません
+登録モータ数分の直近イベントを TransientLocal で保持しますが、イベントは現在の有効状態ではありません
 transport の shutdown / join を完了してから通知 publisher を破棄します
 CAN 周期を待つ間に hardware が error lifecycle へ移った場合も、終了処理で未処理の異常を通知します
 

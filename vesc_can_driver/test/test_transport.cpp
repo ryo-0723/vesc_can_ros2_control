@@ -28,12 +28,14 @@ TEST_F(TransportTest, PendingBatchesUseLatestValuesAndConcurrentUpdatesStayToget
 {
   MotorConfig cfg;
   cfg.name = "first";
+  cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
   cfg.feedback_timeout = 2s;
   auto second = cfg;
   second.name = "second";
+  second.motor_id = 2;
   second.controller_id = 12;
   TransportOptions opts;
   opts.tx_topic = "/batch_test/tx";
@@ -122,10 +124,12 @@ TEST_F(TransportTest, InvalidBatchStopsBeforeAnyElementIsCommitted)
   for (const auto &batch : invalid_batches) {
     MotorConfig cfg;
     cfg.name = "first";
+    cfg.motor_id = 1;
     cfg.controller_id = 11;
     cfg.mode = ControlMode::Current;
     auto second = cfg;
     second.name = "second";
+    second.motor_id = 2;
     second.controller_id = 12;
     TransportOptions opts;
     opts.auto_activate = true;
@@ -147,6 +151,7 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
 {
   MotorConfig cfg;
   cfg.name = "drive";
+  cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.command_timeout = 100ms;
   cfg.feedback_timeout = 100ms;
@@ -258,6 +263,7 @@ TEST_F(TransportTest, DefaultTimerRepeatsOneCommandAt100Hz)
 {
   MotorConfig cfg;
   cfg.name = "current";
+  cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
@@ -321,6 +327,7 @@ TEST_F(TransportTest, FaultCallbackRunsOutsideStateLockWithoutWaitingForSendTime
 {
   MotorConfig cfg;
   cfg.name = "drive";
+  cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.feedback_timeout = 2s;
   TransportOptions opts;
@@ -395,6 +402,7 @@ TEST_F(TransportTest, SelectivePollingRoutesDeviceFaultsAndNotifiesOnlyCodeChang
 {
   MotorConfig cfg;
   cfg.name = "drive";
+  cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.feedback_timeout = 2s;
   TransportOptions opts;
@@ -491,6 +499,7 @@ TEST_F(TransportTest, RejectsInvalidHostIdsAndIgnoresUnrequestedRepliesWhenPolli
 {
   MotorConfig cfg;
   cfg.name = "drive";
+  cfg.motor_id = 1;
   cfg.controller_id = 11;
   auto peer = std::make_shared<rclcpp::Node>("disabled_fault_peer");
   auto can_node = std::make_shared<rclcpp::Node>("disabled_fault_io");
@@ -525,12 +534,14 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
 {
   MotorConfig cfg;
   cfg.name = "drive";
+  cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
   cfg.feedback_timeout = 100ms;
   auto second = cfg;
   second.name = "other";
+  second.motor_id = 2;
   second.controller_id = 12;
   TransportOptions opts;
   opts.tx_topic = "/auto_reboot_test/tx";

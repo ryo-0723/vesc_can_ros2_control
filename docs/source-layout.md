@@ -15,8 +15,8 @@
 通常ノードは実行ファイルなので公開ヘッダを持ちません。
 `vesc_system.hpp` は別パッケージの hardware plugin のヘッダです。
 独自 msg / srv は独立した `vesc_can_msgs` にまとめます
-`msg/` は VescCommand、VescCommandArray、VescState、VescStateArray、`srv/` は Reboot の定義です
-上位ノードはドライバ本体に依存せず、指令・状態・再起動の型を使えます
+`msg/` は VescCommand、VescCommandArray、VescState、VescStateArray、VescEvent、`srv/` は Reboot の定義です
+上位ノードはドライバ本体に依存せず、指令・状態・エラー・再起動の型を使えます
 
 ## 共用する範囲
 
@@ -82,10 +82,12 @@ STATUS と指令の受信時刻は `std::optional<TimePoint>` です。
 未受信は `nullopt` とし、時刻ゼロでの受信と区別します。
 `steady_now` は期限判定、`stamp` はメッセージに付ける ROS 時刻です。
 通常ノードの指令は `/vesc/commands` の VescCommandArray に統一しています
-logical_id は通常ノードで保持し、共通の MotorConfig には CAN の controller_id だけを渡します
+MotorConfig は論理 motor_id と CAN の controller_id を別に保持します
+論理 ID は通常ノードの YAML または hardware の URDF の logical_id から読み取り、一意性を検査します
 通常ノードは state_topic（既定 /vesc/state）に VescStateArray を配信します
 hardware のモータ別 state トピックと state interface の名前は同じです
-VescState は取得する CAN 生値から独自定義にし、項目名に単位を付けています
+VescState は速度・角度を関節単位の float64 に変換し、監視値を float32 で配信します
+MotorState の生値と ros2_control の state interface の double は維持します
 VescState.position_rad は STATUS5 を tacho_to_pos() で積算関節角 [rad] へ換算した値です
 位置制御以外の hardware position state も同じ関数を使い、位置制御では STATUS4 を維持します
 通常ノードの control_mode / command_interface は起動後の変更を拒否します

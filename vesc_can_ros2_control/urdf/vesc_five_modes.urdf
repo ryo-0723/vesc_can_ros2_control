@@ -34,6 +34,7 @@
       <param name="activation_timeout_ms">2000</param>
     </hardware>
     <joint name="drive_joint">
+      <param name="logical_id">1</param>
       <param name="controller_id">11</param><param name="pole_pairs">7</param>
       <param name="control_mode">velocity</param>
       <param name="feedback_timeout_ms">300</param><param name="command_timeout_ms">300</param>
@@ -42,6 +43,7 @@
       <state_interface name="current"/>
     </joint>
     <joint name="steer_joint">
+      <param name="logical_id">2</param>
       <param name="controller_id">21</param><param name="pole_pairs">7</param>
       <param name="control_mode">position</param>
       <param name="min_position">-1.0</param><param name="max_position">1.0</param>
@@ -51,6 +53,7 @@
       <state_interface name="current"/>
     </joint>
     <joint name="current_joint">
+      <param name="logical_id">3</param>
       <param name="controller_id">12</param><param name="pole_pairs">7</param>
       <param name="control_mode">current</param><param name="direction">-1</param>
       <param name="max_current_a">3.0</param>
@@ -60,6 +63,7 @@
       <state_interface name="current"/>
     </joint>
     <joint name="hybrid_joint">
+      <param name="logical_id">4</param>
       <param name="controller_id">31</param><param name="pole_pairs">7</param>
       <param name="control_mode">current_velocity</param>
       <param name="max_current_a">3.0</param><param name="startup_current_a">2.0</param>
@@ -71,6 +75,7 @@
       <state_interface name="current"/>
     </joint>
     <joint name="duty_joint">
+      <param name="logical_id">5</param>
       <param name="controller_id">41</param><param name="pole_pairs">7</param>
       <param name="control_mode">duty_cycle</param><param name="direction">-1</param>
       <param name="max_duty">0.5</param>

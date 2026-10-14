@@ -7,13 +7,13 @@ GitHub へのソース公開と、ROS apt で配布するためのリリース�
 
 | パッケージ | 内容 | このリポジトリ内の依存 |
 |---|---|---|
-| vesc_can_msgs | 独自の指令・状態 msg と再起動 srv | なし |
+| vesc_can_msgs | 独自の指令・状態・エラー msg と再起動 srv | なし |
 | vesc_can_driver | CAN encode/decode、通信管理、通常ノード、状態出力 | vesc_can_msgs |
 | vesc_can_ros2_control | hardware plugin、control 用の起動・設定例 | vesc_can_driver |
 
 メッセージパッケージを先に、ドライバ、hardware plugin の順でビルドします
 同梱した F1TENTH の vesc_msgs は廃止し、インターフェースはこのリポジトリで独立して管理します
-上位ノードも vesc_can_msgs に依存すれば指令・状態・再起動の型を使用できます
+上位ノードも vesc_can_msgs に依存すれば指令・状態・エラー・再起動の型を使用できます
 
 ## 公開準備
 
@@ -23,8 +23,9 @@ GitHub へのソース公開と、ROS apt で配布するためのリリース�
    maintainer は `ryo-0723 <tengbenliang742@gmail.com>` に設定済み
    初期コードの出典はルート README に記録している
 3. README、設定例、CHANGELOG、バージョン、依存関係を整え、GitHub 上で CI を通す
-   通常ノードの /vesc/state は VescStateArray に変更し、各要素の motor_name と position_rad を使う
-   VescState / VescStateArray の定義に合わせ、購読側の再ビルドを案内する
+   通常ノードの /vesc/state は VescStateArray に変更し、各要素の motor_id と変換済みの速度・角度を使う
+   /vesc/event は VescEvent に変更し、hardware URDF の各 joint に logical_id を追加する
+   VescState / VescStateArray / VescEvent の定義に合わせ、購読側の再ビルドを案内する
 4. source release/tag と release repository を用意し、対象 distro の bloom / rosdistro 手続きを行う
    依存の解決と ROS build farm のビルドを確認する
    具体的な手続きはリリース時の公式文書に従う

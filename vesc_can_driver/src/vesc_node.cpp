@@ -69,6 +69,7 @@ private:
     if (motor_id < 0 || motor_id > 255 || motor_idx_[motor_id] >= 0) {
       throw std::invalid_argument(motor_name + ": logical ID must be unique and in [0, 255]");
     }
+    cfg.motor_id = static_cast<std::uint8_t>(motor_id);
     const auto controller_id = declare_parameter<std::int64_t>(prefix + "controller_id", -1);
     if (controller_id < 0 || controller_id > 254) {
       throw std::invalid_argument(motor_name + ": controller ID must be in [0, 254]");

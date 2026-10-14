@@ -16,6 +16,7 @@ MotorConfig make_motor_config(std::uint8_t controller_id = 11)
 {
   MotorConfig cfg;
   cfg.name = "motor" + std::to_string(controller_id);
+  cfg.motor_id = controller_id;
   cfg.controller_id = controller_id;
   cfg.command_timeout = 100ms;
   cfg.feedback_timeout = 200ms;

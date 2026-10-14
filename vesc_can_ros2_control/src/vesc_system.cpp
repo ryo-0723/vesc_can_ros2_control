@@ -96,9 +96,16 @@ vesc_can_driver::MotorConfig VescSystem::load_joint_config(
   const auto &params = joint.parameters;
   cfg.mode = vesc_can_driver::resolve_control_mode(
     get_string_parameter(params, "control_mode", ""), command_interface);
-  if (params.count("controller_id") == 0 || params.count("pole_pairs") == 0) {
-    throw std::invalid_argument(joint.name + ": controller_id and pole_pairs are required");
+  if (params.count("logical_id") == 0 || params.count("controller_id") == 0 ||
+      params.count("pole_pairs") == 0) {
+    throw std::invalid_argument(
+      joint.name + ": logical_id, controller_id and pole_pairs are required");
   }
+  const int motor_id = get_integer_parameter(params, "logical_id", 0);
+  if (motor_id > 255) {
+    throw std::invalid_argument("Logical motor ID must be in [0, 255]");
+  }
+  cfg.motor_id = static_cast<std::uint8_t>(motor_id);
   const int controller_id = get_integer_parameter(params, "controller_id", 0);
   if (controller_id > 254) {
     throw std::invalid_argument("Controller ID must be in [0, 254]");

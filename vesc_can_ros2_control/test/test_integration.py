@@ -8,7 +8,6 @@ from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Time
 from can_msgs.msg import Frame
 from controller_manager_msgs.srv import ListControllers
-from diagnostic_msgs.msg import DiagnosticArray
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -20,7 +19,7 @@ from sensor_msgs.msg import JointState
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import Float64MultiArray
 from vesc_can_msgs.srv import Reboot
-from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescState, VescStateArray
+from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescState, VescStateArray, VescEvent
 
 
 @pytest.mark.launch_test
@@ -195,14 +194,13 @@ class IntegrationTest(unittest.TestCase):
 
     def observe_vesc_state(self, msg):
         self.assertGreater(msg.stamp.sec, 0)
-        self.vesc_states[msg.controller_id] = msg
-        self.vesc_times.setdefault(msg.controller_id, []).append(time.monotonic())
+        self.vesc_states[msg.motor_id] = msg
+        self.vesc_times.setdefault(msg.motor_id, []).append(time.monotonic())
 
     def observe_state_array(self, msg):
         self.assertGreater(msg.stamp.sec, 0)
-        self.assertEqual(len({state.motor_name for state in msg.states}), len(msg.states))
+        self.assertEqual(len({state.motor_id for state in msg.states}), len(msg.states))
         for state in msg.states:
-            self.assertTrue(state.motor_name)
             self.assertEqual(state.stamp, msg.stamp)
             self.observe_vesc_state(state)
         self.state_array = msg
@@ -258,7 +256,7 @@ class IntegrationTest(unittest.TestCase):
 
     def test_01_ros2_control_plugin_mixed_modes_and_feedback_loss(self):
         events = []
-        self.node.create_subscription(DiagnosticArray, "/vesc/event", events.append, 10)
+        self.node.create_subscription(VescEvent, "/vesc/event", events.append, 10)
         self.node.create_subscription(Frame, "/control_test/can/tx", self.observe_frame, 100)
         self.node.create_subscription(JointState, "/joint_states", self.observe_joints, 10)
         for name in ("drive_joint", "steer_joint", "current_joint", "hybrid_joint", "duty_joint"):
@@ -325,16 +323,23 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(self.frames[41], (0, -25000))
         self.assertIn((31, 1, 2000), self.frame_history)
         self.assertTrue(
-            self.wait_for(lambda: len(self.vesc_states) == 5, action=publish_control_commands)
-        )
-        self.assertAlmostEqual(self.vesc_states[12].motor_current_a, -1.5)
-        self.assertAlmostEqual(self.vesc_states[41].duty_cycle, -0.25)
-        for id, direction in ((11, 1), (21, 1), (12, -1), (31, 1), (41, -1)):
-            state = self.vesc_states[id]
-            self.assertTrue(state.tachometer_fresh)
-            self.assertAlmostEqual(
-                state.position_rad, state.tachometer_counts * math.tau / 42 * direction
+            self.wait_for(
+                lambda: set(self.vesc_states) == {1, 2, 3, 4, 5}
+                and abs(self.vesc_states[1].velocity_rad_s - 2.0) < 0.02
+                and abs(self.vesc_states[2].pid_pos_rad - 0.25) < 0.001
+                and abs(self.vesc_states[4].velocity_rad_s - 2.0) < 0.02,
+                action=publish_control_commands,
             )
+        )
+        self.assertAlmostEqual(self.vesc_states[3].motor_current_a, -1.5)
+        self.assertAlmostEqual(self.vesc_states[5].duty_cycle, -0.25)
+        self.assertEqual(set(self.vesc_states), {1, 2, 3, 4, 5})
+        for state in self.vesc_states.values():
+            self.assertTrue(math.isfinite(state.velocity_rad_s))
+            self.assertTrue(math.isfinite(state.position_rad))
+        self.assertAlmostEqual(self.vesc_states[1].velocity_rad_s, 2.0, delta=0.02)
+        self.assertAlmostEqual(self.vesc_states[2].pid_pos_rad, 0.25, delta=0.001)
+        self.assertAlmostEqual(self.vesc_states[4].velocity_rad_s, 2.0, delta=0.02)
         rate = self.request(
             GetParameters,
             "/controller_manager/get_parameters",
@@ -342,9 +347,9 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertEqual(rate.values[0].integer_value, 100)
         self.measure_rates(publish_control_commands)
-        for id in (11, 21, 12, 31, 41):
-            self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
-            self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
+        for cid, id in ((11, 1), (21, 2), (12, 3), (31, 4), (41, 5)):
+            self.assert_rate(self.frame_times[cid], 100, f"CAN ID {cid}")
+            self.assert_rate(self.vesc_times[id], 50, f"VescState motor_id {id}")
         self.assert_rate(self.joint_times, 50, "JointState")
 
         def drive_position():
@@ -354,16 +359,15 @@ class IntegrationTest(unittest.TestCase):
             joint_index = self.joints.name.index("drive_joint")
             return (
                 abs(self.joints.velocity[joint_index]) < 0.01
-                and self.vesc_states[11].erpm == 0
-                and abs(drive_position() - self.vesc_states[11].position_rad) < 1e-8
+                and self.vesc_states[1].velocity_rad_s == 0
+                and abs(drive_position() - self.vesc_states[1].position_rad) < 1e-8
             )
 
         # The actual hardware position interface must preserve multiple revolutions.
         drive_cmd = 10.0
         self.assertTrue(
             self.wait_for(
-                lambda: drive_position() > math.tau
-                and self.vesc_states[11].position_rad > math.tau,
+                lambda: drive_position() > math.tau and self.vesc_states[1].position_rad > math.tau,
                 action=publish_control_commands,
             ),
             "Wheel position must accumulate beyond one revolution",
@@ -377,7 +381,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(
             self.wait_for(
                 lambda: drive_position() < forward_pos - math.tau
-                and self.vesc_states[11].position_rad < forward_pos - math.tau,
+                and self.vesc_states[1].position_rad < forward_pos - math.tau,
                 action=publish_control_commands,
             ),
             "Reverse wheel motion must decrease the accumulated position",
@@ -407,20 +411,10 @@ class IntegrationTest(unittest.TestCase):
             ),
             "Feedback loss must release all five modes",
         )
-        self.assertTrue(self.wait_for(lambda: len(events) > 0))
-        self.assertEqual(
-            {status.hardware_id for status in events[-1].status},
-            {
-                "vesc_can_id_11",
-                "vesc_can_id_21",
-                "vesc_can_id_12",
-                "vesc_can_id_31",
-                "vesc_can_id_41",
-            },
-        )
         self.assertTrue(
-            all(status.level == status.ERROR and status.message for status in events[-1].status)
+            self.wait_for(lambda: {event.motor_id for event in events} == {1, 2, 3, 4, 5})
         )
+        self.assertTrue(all(event.message for event in events))
         self.assertTrue(
             self.wait_for(
                 lambda: all(
@@ -451,29 +445,21 @@ class IntegrationTest(unittest.TestCase):
 
         def motor_commands_applied():
             return (
-                set(self.vesc_states) == {11, 21}
-                and abs(self.vesc_states[11].erpm - 134.0) < 1.0
-                and abs(self.vesc_states[21].pid_pos_deg - math.degrees(0.25)) < 0.04
+                set(self.vesc_states) == {1, 2}
+                and abs(self.vesc_states[1].velocity_rad_s - 2.0) < 0.02
+                and abs(self.vesc_states[2].pid_pos_rad - 0.25) < 0.001
             )
 
         self.assertTrue(self.wait_for(motor_commands_applied, action=publish_motor_commands))
         self.assertEqual(self.node.count_publishers(prefix + "/joint_states"), 0)
-        drive_state = self.vesc_states[11]
+        drive_state = self.vesc_states[1]
         self.assertEqual(drive_state.input_voltage_v, 24.0)
         self.assertEqual(drive_state.charge_drawn_ah, 1.25)
         self.assertEqual(drive_state.energy_drawn_wh, 12.0)
         self.assertEqual(drive_state.fault_code, 0)
-        self.assertTrue(drive_state.tachometer_fresh)
-        self.assertAlmostEqual(
-            drive_state.position_rad, drive_state.tachometer_counts * math.tau / 42
-        )
-        steer_state = self.vesc_states[21]
-        self.assertAlmostEqual(
-            steer_state.position_rad, steer_state.tachometer_counts * math.tau / 42
-        )
-        self.assertEqual(
-            [state.motor_name for state in self.state_array.states], ["drive_joint", "steer_joint"]
-        )
+        self.assertTrue(math.isfinite(drive_state.position_rad))
+        self.assertAlmostEqual(drive_state.velocity_rad_s, 2.0, delta=0.02)
+        self.assertEqual([state.motor_id for state in self.state_array.states], [1, 2])
         self.assertEqual(self.node.count_publishers(prefix + "/motors/drive_joint/state"), 0)
         self.assertFalse(
             any(
@@ -482,9 +468,9 @@ class IntegrationTest(unittest.TestCase):
             )
         )
         self.measure_rates(publish_motor_commands)
-        for id in (11, 21):
-            self.assert_rate(self.frame_times[id], 100, f"CAN ID {id}")
-            self.assert_rate(self.vesc_times[id], 50, f"VescState ID {id}")
+        for cid, id in ((11, 1), (21, 2)):
+            self.assert_rate(self.frame_times[cid], 100, f"CAN ID {cid}")
+            self.assert_rate(self.vesc_times[id], 50, f"VescState motor_id {id}")
         self.assert_rate(self.array_times, 50, "VescStateArray (all motors)")
 
         def publish_changed_commands():
@@ -492,8 +478,8 @@ class IntegrationTest(unittest.TestCase):
 
         self.assertTrue(
             self.wait_for(
-                lambda: abs(self.vesc_states[11].erpm - 67.0) < 1.0
-                and abs(self.vesc_states[21].pid_pos_deg - math.degrees(0.1)) < 0.04,
+                lambda: abs(self.vesc_states[1].velocity_rad_s - 1.0) < 0.02
+                and abs(self.vesc_states[2].pid_pos_rad - 0.1) < 0.001,
                 action=publish_changed_commands,
             )
         )
@@ -526,10 +512,9 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(response.results[0].successful)
         self.assertTrue(
             self.wait_for(
-                lambda: math.isnan(self.vesc_states[11].erpm)
-                and math.isnan(self.vesc_states[11].input_voltage_v)
-                and math.isnan(self.vesc_states[11].position_rad)
-                and not self.vesc_states[11].tachometer_fresh
+                lambda: math.isnan(self.vesc_states[1].velocity_rad_s)
+                and math.isnan(self.vesc_states[1].input_voltage_v)
+                and math.isnan(self.vesc_states[1].position_rad)
             ),
             "Missing feedback must invalidate telemetry without inventing device faults",
         )
@@ -683,7 +668,7 @@ class IntegrationTest(unittest.TestCase):
     def test_06_errors_publish_without_waiting_for_state_timer(self):
         events = []
         states = []
-        self.node.create_subscription(DiagnosticArray, "/event_test/event", events.append, 10)
+        self.node.create_subscription(VescEvent, "/event_test/event", events.append, 10)
         self.node.create_subscription(
             VescStateArray,
             "/event_test/state",
@@ -704,39 +689,36 @@ class IntegrationTest(unittest.TestCase):
         invalid = VescCommandArray(commands=[VescCommand(motor_id=1, value=math.nan)])
         self.assertTrue(
             self.wait_for(
-                lambda: len(events) == 1, timeout=0.5, action=lambda: cmd_pub.publish(invalid)
+                lambda: len(events) == 2, timeout=0.5, action=lambda: cmd_pub.publish(invalid)
             )
         )
         elapsed = time.monotonic() - started
         print(f"Command error event: {elapsed * 1000:.1f} ms (state period 2000 ms)", flush=True)
         self.assertLess(elapsed, 0.5)
-        self.assertTrue(
-            all(
-                status.level == status.ERROR and "invalid command value" in status.message
-                for status in events[0].status
-            )
-        )
+        self.assertEqual({event.motor_id for event in events}, {1, 2})
+        self.assertTrue(all("invalid command value" in event.message for event in events))
         self.wait_for(lambda: False, timeout=0.1, action=lambda: cmd_pub.publish(invalid))
-        self.assertEqual(len(events), 1)
+        self.assertEqual(len(events), 2)
 
         self.assertTrue(self.reboot(reboot_srv).success)
         frame = Frame(id=0x40, is_error=True, dlc=8)
         started = time.monotonic()
         self.assertTrue(
             self.wait_for(
-                lambda: len(events) == 2, timeout=0.5, action=lambda: error_pub.publish(frame)
+                lambda: len(events) == 4, timeout=0.5, action=lambda: error_pub.publish(frame)
             )
         )
         print(
             f"CAN error event: {(time.monotonic() - started) * 1000:.1f} ms (state period 2000 ms)",
             flush=True,
         )
-        self.assertTrue(all("CAN error frame" in status.message for status in events[-1].status))
+        self.assertTrue(all("CAN error frame" in event.message for event in events[-2:]))
         retained = []
-        qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.node.create_subscription(DiagnosticArray, "/event_test/event", retained.append, qos)
-        self.assertTrue(self.wait_for(lambda: len(retained) > 0, timeout=0.5))
-        self.assertEqual(retained[-1].status[0].message, events[-1].status[0].message)
+        qos = QoSProfile(depth=2, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.node.create_subscription(VescEvent, "/event_test/event", retained.append, qos)
+        self.assertTrue(self.wait_for(lambda: len(retained) == 2, timeout=0.5))
+        self.assertEqual({event.motor_id for event in retained}, {1, 2})
+        self.assertTrue(all("CAN error frame" in event.message for event in retained))
 
     def test_07_rox2026_yaml_maps_logical_ids_to_can_ids(self):
         self.node.create_subscription(Frame, "/rox_test/can/tx", self.observe_frame, 100)
@@ -762,7 +744,7 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertTrue(
             self.wait_for(
-                lambda: set(self.vesc_states) == {50, 51, 52}, action=lambda: cmd_pub.publish(cmd)
+                lambda: set(self.vesc_states) == {10, 11, 12}, action=lambda: cmd_pub.publish(cmd)
             )
         )
         self.assertIn((51, 1, 7500), self.frame_history)
@@ -818,7 +800,7 @@ class IntegrationTest(unittest.TestCase):
 
     def test_09_can_device_fault_publishes_numeric_code_and_latches_stop(self):
         events = []
-        self.node.create_subscription(DiagnosticArray, "/event_test/event", events.append, 10)
+        self.node.create_subscription(VescEvent, "/event_test/event", events.append, 10)
         self.node.create_subscription(Frame, "/event_test/can/tx", self.observe_frame, 100)
         self.node.create_subscription(
             VescStateArray, "/event_test/state", self.observe_state_array, 10
@@ -828,7 +810,7 @@ class IntegrationTest(unittest.TestCase):
         send = lambda: cmd_pub.publish(cmd)
         reboot_srv = "/event_test/vesc_can_ros2_control/reboot"
         healthy = self.wait_for(
-            lambda: set(self.vesc_states) == {11, 21}
+            lambda: set(self.vesc_states) == {1, 2}
             and all(state.fault_code == 0 for state in self.vesc_states.values()),
             timeout=5.0,  # Allow DDS discovery and two 2000 ms state cycles.
         )
@@ -863,19 +845,11 @@ class IntegrationTest(unittest.TestCase):
             "(state period 2000 ms, fault query period 100 ms)",
             flush=True,
         )
-        self.assertEqual(len(events[0].status), 1)
-        status = events[0].status[0]
-        self.assertEqual(status.level, status.ERROR)
-        self.assertEqual(status.hardware_id, "vesc_can_id_21")
-        self.assertTrue(status.name.endswith("/steer_joint"))
-        self.assertEqual(
-            {item.key: item.value for item in status.values},
-            {"source": "vesc", "controller_id": "21", "fault_code": "4"},
-        )
-        self.assertGreater(events[0].header.stamp.sec, 0)
+        self.assertEqual(events[0].motor_id, 2)  # Logical ID, despite physical CAN ID 21.
+        self.assertEqual(events[0].message, "VESC fault_code=4 (ABS_OVER_CURRENT)")
         self.assertTrue(self.wait_for(lambda: self.frames == {11: (1, 0), 21: (1, 0)}, action=send))
-        self.assertTrue(self.wait_for(lambda: self.vesc_states[21].fault_code == 4, timeout=3.0))
-        self.assertEqual(self.vesc_states[11].fault_code, 0)
+        self.assertTrue(self.wait_for(lambda: self.vesc_states[2].fault_code == 4, timeout=3.0))
+        self.assertEqual(self.vesc_states[1].fault_code, 0)
         self.wait_for(lambda: False, timeout=0.25)
         self.assertEqual(len(events), 1)  # Identical fault replies are not repeated events.
         response = self.request(
@@ -891,7 +865,7 @@ class IntegrationTest(unittest.TestCase):
             ),
         )
         self.assertTrue(response.results[0].successful)
-        self.assertTrue(self.wait_for(lambda: self.vesc_states[21].fault_code == 0, timeout=3.0))
+        self.assertTrue(self.wait_for(lambda: self.vesc_states[2].fault_code == 0, timeout=3.0))
         self.assertEqual(self.frames, {11: (1, 0), 21: (1, 0)})
         self.assertTrue(self.reboot(reboot_srv, motor_id=2).success)
 
@@ -942,8 +916,8 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(
             self.wait_for(
                 lambda: self.frames.get(41) == (0, -25000)
-                and 41 in self.vesc_states
-                and self.vesc_states[41].duty_cycle == -0.25,
+                and 5 in self.vesc_states
+                and self.vesc_states[5].duty_cycle == -0.25,
                 action=send,
             )
         )
@@ -979,7 +953,7 @@ class IntegrationTest(unittest.TestCase):
             self.assertTrue(
                 self.wait_for(
                     lambda: self.frames.get(41) == (expected_packet, payload)
-                    and self.vesc_states[41].duty_cycle == feedback,
+                    and self.vesc_states[5].duty_cycle == feedback,
                     action=send,
                 )
             )

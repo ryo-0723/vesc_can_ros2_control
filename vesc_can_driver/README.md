@@ -76,9 +76,9 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 | トピック / サービス | 型 | 単位など |
 |---|---|---|
 | /vesc/commands | vesc_can_msgs/msg/VescCommandArray | motor_id は論理 ID、value は起動時モードの単位、stamp は配列の生成時刻 |
-| /vesc/event | diagnostic_msgs/msg/DiagnosticArray | 異常を検出した処理から即時通知、全台停止の理由 |
+| /vesc/event | vesc_can_msgs/msg/VescEvent | 異常を検出した処理から motor_id とエラー文字列を即時通知 |
 | ~/reboot | vesc_can_msgs/srv/Reboot | motor_id に論理 ID を指定し、対応する 1 台を再起動 |
-| /vesc/state | vesc_can_msgs/msg/VescStateArray | 全モータの状態と配信時刻、各要素に motor_name と積算関節角 position_rad [rad] |
+| /vesc/state | vesc_can_msgs/msg/VescStateArray | 全モータの状態と配信時刻、各要素の motor_id は指令と共通 |
 
 `VescCommandArray.commands` の各要素は `uint8 motor_id / float32 value` です
 配列の順序は `motors` の登録順と違っても使えます
@@ -97,7 +97,10 @@ duty の符号は direction、上限は max_duty（既定 1.0）で設定しま�
 未送信の同じモータへの指令は最新値で上書きし、送信待ちの指令履歴を作りません
 同じ値の再受信でも指令期限を更新します
 
-`VescState` は VESC の生値と、STATUS5 から換算した積算関節角 `position_rad` [rad] を配信します
+`VescState` は関節速度 `velocity_rad_s` [rad/s]、積算関節角 `position_rad` [rad]、
+PID 関節角 `pid_pos_rad` [rad] と監視値を配信します
+速度・角度は float64、電流・duty・電荷・電力量・温度・電圧は float32 です
+電流と duty は VESC 生値の符号を保持します
 `position_rad = tachometer_counts × 2π / (6 × pole_pairs × gear_ratio) × direction` です
 全モードで同じ式を使い、2π で折り返さず、未受信・期限切れでは NaN を返します
 オドメトリには前回値との差分を使います
@@ -105,7 +108,7 @@ STATUS5 を必須にする場合は各モータの `require_tachometer: true` �
 VESC 側で STATUS5 の周期送信を有効にし、CAN ブリッジの受信フィルタでも通してください
 積算角の測定更新は STATUS5 の受信周期に従い、状態トピックの配信周期とは別です
 通常ノードは `/vesc/state` に全モータを YAML の motors 順で配信します
-各要素の `motor_name` で対象を選び、`controller_id` は実機の識別・診断用に使います
+各要素の `motor_id` は指令と同じ logical_id で、上位ノードはこの ID で対象を選びます
 配列全体と各要素の stamp は同じ配信時刻で、CAN の同時測定を表しません
 `state_topic: ""` を指定すると `~/motors/<motor_name>/state` に個別配信できます
 全モータを読む場合は配列で 1 周期 1 回の publish にまとめられます
@@ -128,7 +131,7 @@ ros2 topic echo /vesc/state
 
 旧 ActuatorTarget / ActuatorState、SetPosition.srv は廃止しました
 通常ノードの旧 Float64 / JointState / MotorCommands 指令は VescCommandArray に統一しました
-指令・状態・再起動サービスの型は独立した vesc_can_msgs にまとめています
+指令・状態・エラー・再起動サービスの型は独立した vesc_can_msgs にまとめています
 上位パッケージは vesc_can_msgs に依存すればこれらの型を使えます
 C++ / Python の利用例は [vesc_can_msgs](../vesc_can_msgs/README.md) を参照してください
 状態値の取得範囲、未取得値、旧 API の移行は [メッセージ対応表](../docs/messages.md) を参照してください。
@@ -154,7 +157,8 @@ CAN トピックのパラメータ未指定時の既定値は従来の /socketca
 モータ一覧とモータ名ごとの設定を使う例です
 upper_belt は論理 ID 10 / CAN ID 51、under_belt は 11 / 52、dribble は 12 / 50 です
 論理 ID は 0〜255 の範囲で重複させず、CAN ID は 0〜254 で重複させません
-ros2_control は引き続き関節名で管理し、logical_id は通常ノードの設定だけで使用します
+ros2_control の制御 interface は関節名で管理し、URDF の各 joint にも logical_id を指定します
+同じモータの YAML と URDF で logical_id を揃えると、どちらの入口でも同じ motor_id で状態・エラーを扱えます
 
 ```bash
 ros2 launch vesc_can_driver vesc_standalone.launch.py \
@@ -166,7 +170,7 @@ ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
 必要なフィードバックが揃うと、指令だけで動作を開始します
 旧 rox2026 の target は機械 RPM ですが、新 API の速度は関節 rad/s です
 CAN 指令は 10 ms、状態は 20 ms とし、旧コードの 25 ms / 500 ms から変更しています
-状態は従来どおりモータ名ごとの VescState で、旧 ActuatorStateArray は生成しません
+状態は /vesc/state の VescStateArray にまとめ、旧 ActuatorStateArray は生成しません
 
 rox2026 の /socketcan_bridge/vesc/rx には STATUS1 と故障応答を通すフィルタを設定します
 host_can_id=254 の例は `00000900:9FFFFF00,000008FE:9FFFFFFF` です
@@ -174,19 +178,22 @@ STATUS2〜6 も使う場合は各パケット ID のフィルタも追加しま�
 
 ## 即時の異常通知
 
-`/vesc/event` は通常ノードと hardware component 共通の DiagnosticArray です
+`/vesc/event` は通常ノードと hardware component 共通の VescEvent です
 周期の状態配信を待たず、異常を検出した処理から配信します
-VESC 本体の故障は該当モータを status に入れ、name にモータ名、hardware_id に CAN ID、
-values に source=vesc / controller_id / fault_code を入れます
-PC 側の不正指令や通信途絶は source=driver として全台の停止理由を通知し、VESC 故障番号を捏造しません
+内容は uint8 motor_id と string message の 2 項目です
+VESC 本体の故障は該当 ID へ `VESC fault_code=4 (ABS_OVER_CURRENT)` のような文字列を通知します
+故障名は [VESC 6.06 の enum](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/datatypes.h#L132-L163) に対応し、未知の番号は UNKNOWN と表示します
+PC 側の不正指令や通信途絶は、影響する全 ID へ同じ停止理由を通知します
+正常コード 0 はイベントにしません
 VESC 本体の同じ故障コードは繰り返さず、別のコードまたは正常応答後の再発を通知します
 PC 側の同じ異常はラッチ中に繰り返しません
-Reliable / TransientLocal / KeepLast(1) なので、publisher の生存中は最後の異常を後から取得できます
+Reliable / TransientLocal / KeepLast(登録モータ数) で直近のイベントを保持します
+全台停止時は全 ID の通知を後から取得できます
 これは異常の履歴です。本体の現在の故障コードは周期の状態配信で確認します
 PC 側の停止保持は通常ノードの reboot または hardware lifecycle の復旧操作で解除します
 
 ```bash
-ros2 topic echo /vesc/event diagnostic_msgs/msg/DiagnosticArray --qos-durability transient_local
+ros2 topic echo /vesc/event vesc_can_msgs/msg/VescEvent --qos-durability transient_local
 ```
 
 故障コードは、VESC 6.06 の [COMM_GET_VALUES_SELECTIVE](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/commands.c#L358-L453)

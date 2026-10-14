@@ -21,6 +21,8 @@ controller_manager が `vesc_can_ros2_control/VescSystem` をロードし、
 実ロボットの URDF に `<ros2_control type="system">` の部分を追加し、
 各 VESC を `<joint>` として記述します。4 輪独立駆動・操舵なら同じ System 内へ
 8 関節を登録できます。CAN ID は同じバス内で重複させません。
+各 joint に logical_id も指定し、状態・エラーの motor_id として使用します
+同じ System 内で一意にし、通常ノードで使う YAML と同じモータなら logical_id を揃えます
 
 各関節の command_interface は current、velocity、position、duty_cycle のいずれかを 1 つ指定します
 モードは joint param の `control_mode` で current / velocity / position / duty_cycle / current_velocity を
@@ -32,6 +34,7 @@ temperature_fet/temperature_motor/input_voltage/duty_cycle の状態を公開で
 
 | パラメータ | 意味 |
 |---|---|
+| logical_id | ROS 側の motor_id、0〜255、必須。同じ System 内で重複させない |
 | controller_id | VESC の CAN ID、0〜254、必須。255 のブロードキャストは禁止 |
 | pole_pairs | モータの極対数、正整数、必須。14 極なら 7 |
 | gear_ratio | モータ回転数 / 関節回転数。20:1 減速なら 20 |
@@ -54,6 +57,8 @@ state_publish_period_ms (既定 20)、activation_timeout_ms (既定 2000) を指
 current state interface は関節方向の符号を適用したモータ電流 [A] です。
 duty_cycle state interface も direction を適用した関節方向の比率です
 VescState の電流と duty_cycle は VESC 生値を保持します
+VescState の velocity_rad_s と 2 種類の角度は float64、監視値は float32 です
+ros2_control の state interface はすべて double を維持します
 電流モードでも position state interface を登録する場合は STATUS5 が必要です。
 5 モードの URDF / controller 設定と起動コマンドは
 [モータの制御モード](../docs/motor-modes.md#設定例) を参照してください。
@@ -73,6 +78,8 @@ position_rad = tachometer_counts × 2π / (6 × pole_pairs × gear_ratio) × dir
 必要な URDF 設定は次の通りです（VescSystem の各 joint 内）
 
 ```xml
+<param name="logical_id">1</param>
+<param name="controller_id">11</param>
 <param name="control_mode">velocity</param>
 <param name="pole_pairs">7</param>
 <param name="gear_ratio">1.0</param>
@@ -136,14 +143,17 @@ state interface を直接読むオドメトリ controller は 100 Hz の更新�
 例の `VescFiveModes` なら `/VescFiveModes_can_io/motors/drive_joint/state` になります。
 namespace を付けた場合はこの先頭に追加されます。電流・温度・電圧などの生値と単位は
 通常ノードと同じ [メッセージ対応表](../docs/messages.md) に従います。
+VescState.motor_id は各 joint の logical_id、velocity_rad_s は関節速度 [rad/s]、
+pid_pos_rad は STATUS4 の変換後の PID 関節角 [rad] です
 
 ドライバが異常を検出すると、周期の状態配信とは別に `/vesc/event` へ
-DiagnosticArray を即時配信します
+VescEvent の motor_id と message を即時配信します
 hardware の `error_topic` param で配信先を変更できます
 read/write は ROS 通知を配信せず、CAN executor が異常を処理した直後に通知します
 VESC 本体の fault_code は CAN selective 問い合わせで取得します
 hardware の host_can_id（既定 254）と fault_poll_period_ms（既定 100）で設定します
-受信時に /vesc/event へ source=vesc / controller_id / fault_code を載せて通知し、全台停止します
+異常応答の受信時に該当 motor_id と `VESC fault_code=4 (ABS_OVER_CURRENT)` のようなエラー文字列を通知し、全台停止します
+PC 側の異常は影響する全 motor_id に同じ停止理由を通知します
 hardware の停止保持は controller_manager の lifecycle 復旧で解除します
 activate / deactivate は PC 内部の状態で、VESC 有効化・無効化パケットは送りません
 VescState.fault_code は未受信・期限切れに -1 を返します

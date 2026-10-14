@@ -47,6 +47,7 @@ bool is_velocity_mode(ControlMode mode);
 struct MotorConfig
 {
   std::string name;
+  std::uint8_t motor_id{};  // ROS logical ID, independent of CAN addressing
   std::uint8_t controller_id{};
   ControlMode mode{ControlMode::Velocity};
   double pole_pairs{7.0};

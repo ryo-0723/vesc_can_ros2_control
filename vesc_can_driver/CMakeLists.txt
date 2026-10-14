@@ -7,7 +7,6 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(can_msgs REQUIRED)
-find_package(diagnostic_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(vesc_can_msgs REQUIRED)
@@ -32,11 +31,11 @@ add_library(vesc_can_driver_state SHARED src/vesc_state.cpp)
 add_library(vesc_can_driver::state ALIAS vesc_can_driver_state)
 set_target_properties(vesc_can_driver_state PROPERTIES EXPORT_NAME state)
 target_link_libraries(vesc_can_driver_state PUBLIC
-  vesc_can_driver::driver ${vesc_can_msgs_TARGETS} ${diagnostic_msgs_TARGETS})
+  vesc_can_driver::driver ${vesc_can_msgs_TARGETS})
 
 add_executable(vesc_node src/vesc_node.cpp)
 target_link_libraries(vesc_node PRIVATE vesc_can_driver::driver vesc_can_driver::state
-  ${vesc_can_msgs_TARGETS} ${diagnostic_msgs_TARGETS})
+  ${vesc_can_msgs_TARGETS})
 # Installed even with BUILD_TESTING=OFF so use_mock launch demos remain available.
 add_executable(fake_vesc_node test/support/fake_vesc_node.cpp)
 target_link_libraries(fake_vesc_node PRIVATE vesc_can_driver::driver rclcpp::rclcpp)
@@ -61,5 +60,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_vesc_can_driver HAS_LIBRARY_TARGET NAMESPACE vesc_can_driver::)
-ament_export_dependencies(can_msgs diagnostic_msgs rclcpp vesc_can_msgs Threads)
+ament_export_dependencies(can_msgs rclcpp vesc_can_msgs Threads)
 ament_package()
