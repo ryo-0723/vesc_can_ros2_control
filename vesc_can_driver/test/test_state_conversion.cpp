@@ -5,7 +5,8 @@
 #include <thread>
 
 #include "gtest/gtest.h"
-#include "vesc_can_driver/vesc_driver.hpp"
+#include "support/can_test_helpers.hpp"
+#include "vesc_can_driver/driver_core.hpp"
 #include "vesc_can_driver/vesc_node.hpp"
 
 namespace vesc_can_driver
@@ -40,12 +41,14 @@ MotorConfig state_conversion_config()
 void receive_all_statuses(DriverCore &core, TimePoint received_at)
 {
   // Known native wire values, independent of the fake node's encoder.
-  ASSERT_TRUE(core.receive(status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244}), received_at));
-  ASSERT_TRUE(core.receive(status_frame(14, {0, 0, 48, 212, 0, 0, 19, 136}), received_at));
-  ASSERT_TRUE(core.receive(status_frame(15, {0, 1, 212, 192, 0, 0, 39, 16}), received_at));
-  ASSERT_TRUE(core.receive(status_frame(16, {1, 44, 1, 54, 0, 12, 17, 148}), received_at));
-  ASSERT_TRUE(core.receive(status_frame(27, {255, 255, 255, 214, 0, 240, 0, 0}), received_at));
-  ASSERT_TRUE(core.receive(status_frame(58, {4, 76, 8, 152, 12, 228, 254, 12}), received_at));
+  ASSERT_TRUE(receive_frame(core, status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244}), received_at));
+  ASSERT_TRUE(receive_frame(core, status_frame(14, {0, 0, 48, 212, 0, 0, 19, 136}), received_at));
+  ASSERT_TRUE(receive_frame(core, status_frame(15, {0, 1, 212, 192, 0, 0, 39, 16}), received_at));
+  ASSERT_TRUE(receive_frame(core, status_frame(16, {1, 44, 1, 54, 0, 12, 17, 148}), received_at));
+  ASSERT_TRUE(
+    receive_frame(core, status_frame(27, {255, 255, 255, 214, 0, 240, 0, 0}), received_at));
+  ASSERT_TRUE(
+    receive_frame(core, status_frame(58, {4, 76, 8, 152, 12, 228, 254, 12}), received_at));
 }
 
 TEST(StateConversion, ConvertsFeedbackAndKeepsLogicalIdentityWithCompactMonitoring)
@@ -54,7 +57,7 @@ TEST(StateConversion, ConvertsFeedbackAndKeepsLogicalIdentityWithCompactMonitori
   DriverCore core({cfg});
   const auto received_at = TimePoint(1s);
   receive_all_statuses(core, received_at);
-  const auto &state = core.states().front();
+  const auto &state = core.motors().front().state();
   const auto msg = make_vesc_state(cfg, state, received_at);
   EXPECT_EQ(msg.motor_id, 1);  // Different from physical CAN ID 11.
   EXPECT_NEAR(msg.velocity_rad_s, -kPi, 1e-9);
@@ -95,9 +98,9 @@ TEST(StateConversion, VelocityAndAccumulatedAngleRetainPrecisionAtInt32Limits)
   const auto cfg = state_conversion_config();
   DriverCore core({cfg});
   const auto now = TimePoint(1s);
-  ASSERT_TRUE(core.receive(status_frame(9, {0x7F, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0}), now));
-  ASSERT_TRUE(core.receive(status_frame(27, {0x80, 0, 0, 0, 0, 240, 0, 0}), now));
-  const auto msg = make_vesc_state(cfg, core.states()[0], now);
+  ASSERT_TRUE(receive_frame(core, status_frame(9, {0x7F, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0}), now));
+  ASSERT_TRUE(receive_frame(core, status_frame(27, {0x80, 0, 0, 0, 0, 240, 0, 0}), now));
+  const auto msg = make_vesc_state(cfg, core.motors()[0].state(), now);
   EXPECT_DOUBLE_EQ(msg.velocity_rad_s, erpm_to_vel(cfg, std::numeric_limits<std::int32_t>::max()));
   EXPECT_DOUBLE_EQ(msg.position_rad, tacho_to_pos(cfg, std::numeric_limits<std::int32_t>::min()));
   EXPECT_TRUE(std::isfinite(msg.position_rad));
@@ -110,10 +113,10 @@ TEST(StateConversion, DeviceFaultCodesRequireFreshRepliesAndKeepUnknownCodes)
   const auto received_at = TimePoint{};
   for (std::uint8_t code : {0, 4, 255}) {
     ASSERT_TRUE(core.receive_fault({11, code}, received_at));
-    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at).fault_code, code);
-    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at + 200ms).fault_code, code);
-    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at + 201ms).fault_code, -1);
-    EXPECT_EQ(make_vesc_state(cfg, core.states()[0], received_at - 1ms).fault_code, -1);
+    EXPECT_EQ(make_vesc_state(cfg, core.motors()[0].state(), received_at).fault_code, code);
+    EXPECT_EQ(make_vesc_state(cfg, core.motors()[0].state(), received_at + 200ms).fault_code, code);
+    EXPECT_EQ(make_vesc_state(cfg, core.motors()[0].state(), received_at + 201ms).fault_code, -1);
+    EXPECT_EQ(make_vesc_state(cfg, core.motors()[0].state(), received_at - 1ms).fault_code, -1);
   }
 }
 
@@ -123,13 +126,13 @@ TEST(StateConversion, FeedbackExpiresByPacketAndOptionalStatusIsNotRequiredForCo
   DriverCore core({cfg});
   const auto received_at = TimePoint(1s);
   const auto rpm_frame = status_frame(9, {0, 0, 1, 164, 0, 15, 1, 244});
-  ASSERT_TRUE(core.receive(rpm_frame, received_at));
-  EXPECT_TRUE(
-    state_ready(cfg, core.states().front(), received_at));  // STATUS2/3/6 are optional telemetry.
+  ASSERT_TRUE(receive_frame(core, rpm_frame, received_at));
+  EXPECT_TRUE(state_ready(
+    cfg, core.motors().front().state(), received_at));  // STATUS2/3/6 are optional telemetry.
   receive_all_statuses(core, received_at);
   const auto steady_now = received_at + 201ms;
-  ASSERT_TRUE(core.receive(rpm_frame, steady_now));
-  const auto msg = make_vesc_state(cfg, core.states().front(), steady_now);
+  ASSERT_TRUE(receive_frame(core, rpm_frame, steady_now));
+  const auto msg = make_vesc_state(cfg, core.motors().front().state(), steady_now);
   EXPECT_NEAR(msg.velocity_rad_s, -kPi, 1e-9);
   EXPECT_TRUE(std::isnan(msg.temp_fet_c));
   EXPECT_TRUE(std::isnan(msg.input_voltage_v));
@@ -154,19 +157,20 @@ TEST(StateConversion, AccumulatedAngleUsesStatus5InEveryModeAndExpiresIndependen
     }
     DriverCore core({cfg});
     // No STATUS1/4 is needed to decode and publish the measured accumulated angle.
-    ASSERT_TRUE(core.receive(status_frame(27, {255, 255, 255, 88, 0, 240, 0, 0}), now));
-    EXPECT_NEAR(make_vesc_state(cfg, core.states()[0], now).position_rad, 4.0 * kPi, 1e-9);
-    ASSERT_TRUE(core.receive(status_frame(16, {1, 44, 1, 54, 0, 12, 17, 148}), now + 1ms));
-    const auto msg = make_vesc_state(cfg, core.states()[0], now + 200ms);
+    ASSERT_TRUE(receive_frame(core, status_frame(27, {255, 255, 255, 88, 0, 240, 0, 0}), now));
+    EXPECT_NEAR(make_vesc_state(cfg, core.motors()[0].state(), now).position_rad, 4.0 * kPi, 1e-9);
+    ASSERT_TRUE(receive_frame(core, status_frame(16, {1, 44, 1, 54, 0, 12, 17, 148}), now + 1ms));
+    const auto msg = make_vesc_state(cfg, core.motors()[0].state(), now + 200ms);
     EXPECT_NEAR(msg.position_rad, 4.0 * kPi, 1e-9);
     EXPECT_NEAR(msg.pid_pos_rad, 0.0, 1e-9);
     if (mode == ControlMode::Position) {
-      EXPECT_NEAR(core.states()[0].pos_rad, 0.0, 1e-9);  // PID feedback keeps its own origin.
+      EXPECT_NEAR(
+        core.motors()[0].state().pos_rad, 0.0, 1e-9);  // PID feedback keeps its own origin.
     }
-    const auto stale = make_vesc_state(cfg, core.states()[0], now + 201ms);
+    const auto stale = make_vesc_state(cfg, core.motors()[0].state(), now + 201ms);
     EXPECT_TRUE(std::isnan(stale.position_rad));
     EXPECT_NEAR(stale.pid_pos_rad, 0.0, 1e-9);  // A fresh STATUS4 cannot refresh STATUS5.
-    EXPECT_TRUE(std::isnan(make_vesc_state(cfg, core.states()[0], now - 1ms).position_rad));
+    EXPECT_TRUE(std::isnan(make_vesc_state(cfg, core.motors()[0].state(), now - 1ms).position_rad));
   }
 }
 

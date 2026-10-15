@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "can_msgs/msg/frame.hpp"
+#include "vesc_can_driver/vesc_interface.hpp"
 
 namespace vesc_can_driver::protocol
 {
@@ -29,11 +31,7 @@ constexpr std::uint32_t kStatus4Id = 16;
 constexpr std::uint32_t kStatus5Id = 27;
 constexpr std::uint32_t kStatus6Id = 58;
 
-struct FaultCode
-{
-  std::uint8_t controller_id{};
-  std::uint8_t code{};
-};
+using FaultCode = vesc_can_driver::FaultCode;
 
 /// @brief CAN の short buffer で VESC 故障コードだけを問い合わせる
 /// @note 応答先は kReplyCanId に固定
@@ -50,50 +48,15 @@ can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id);
 /// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_fault_reply(const can_msgs::msg::Frame &frame, FaultCode &fault);
 
-struct Status1
-{
-  std::uint8_t controller_id{};
-  std::int32_t electrical_rpm{};
-  double motor_current_a{};
-  double duty_cycle{};
-};
-struct Status2
-{
-  std::uint8_t controller_id{};
-  double charge_drawn_ah{};
-  double charge_regen_ah{};
-};
-struct Status3
-{
-  std::uint8_t controller_id{};
-  double energy_drawn_wh{};
-  double energy_regen_wh{};
-};
-struct Status4
-{
-  std::uint8_t controller_id{};
-  double temperature_fet_c{};
-  double temperature_motor_c{};
-  double input_current_a{};
-  double motor_pid_position_deg{};
-};
-struct Status5
-{
-  std::uint8_t controller_id{};
-  std::int32_t tachometer_counts{};
-  double input_voltage_v{};
-};
-struct Status6
-{
-  std::uint8_t controller_id{};
-  double adc_1_v{};
-  double adc_2_v{};
-  double adc_3_v{};
-  double ppm{};  // normalized PPM input, dimensionless
-};
+using Status1 = MotionFeedback;
+using Status2 = ChargeFeedback;
+using Status3 = EnergyFeedback;
+using Status4 = ControlFeedback;
+using Status5 = PositionFeedback;
+using Status6 = AnalogFeedback;
 
 // 指令関数名は公式 firmware 6.06 の comm_can.c に対応
-// このライブラリでは CAN フレームを返し，送信は CanTransport が担当する
+// このライブラリでは CAN フレームを返し，送信は CanInterface が担当する
 
 /// @brief duty 比の指令フレームを生成
 /// @param controller_id 宛先 ID（0〜254）
@@ -157,4 +120,9 @@ bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status);
 /// @param[out] status 正常時に更新するデコード結果
 /// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status);
+/// @brief 共通指令を VESC の CAN フレームへ変換する
+can_msgs::msg::Frame encode_command(const VescCommand &command);
+/// @brief CAN の STATUS / 故障応答を共通受信値へ変換する
+/// @return 未対応・不正フレームでは nullopt
+std::optional<VescFeedback> decode_feedback(const can_msgs::msg::Frame &frame);
 }  // namespace vesc_can_driver::protocol

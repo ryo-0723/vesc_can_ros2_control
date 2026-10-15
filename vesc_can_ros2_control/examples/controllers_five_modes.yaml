@@ -34,7 +34,7 @@ current_controller:
 hybrid_controller:
   ros__parameters:
     joints: [hybrid_joint]
-    interface_name: velocity
+    interface_name: current_velocity
 duty_controller:
   ros__parameters:
     joints: [duty_joint]

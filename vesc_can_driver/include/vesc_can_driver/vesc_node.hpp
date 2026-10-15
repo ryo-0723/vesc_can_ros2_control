@@ -7,7 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "vesc_can_driver/vesc_driver.hpp"
+#include "vesc_can_driver/can_interface.hpp"
+#include "vesc_can_driver/vesc_transport.hpp"
 #include "vesc_can_msgs/msg/vesc_command_array.hpp"
 #include "vesc_can_msgs/msg/vesc_event.hpp"
 #include "vesc_can_msgs/msg/vesc_state.hpp"
@@ -68,7 +69,7 @@ private:
   /// @brief モータごとの ROS パラメータを読み込む
   MotorConfig load_motor_config(const std::string &motor_name);
   /// @brief 同じ namespace / context に専用の通信ノードを作る
-  void initialize_can_transport(const TransportOptions &opts);
+  void initialize_can_transport(const TransportOptions &opts, const CanOptions &can_opts);
   /// @brief 指令トピックと reboot サービスを登録する
   void initialize_command_interfaces();
   /// @brief 状態・エラーの publisher と周期タイマーを作る
@@ -84,7 +85,7 @@ private:
   std::vector<MotorState> states_;
   // The transport joins its callbacks before the state/error publishers are destroyed.
   std::unique_ptr<MotorStatePublisher> state_pub_;
-  std::unique_ptr<CanTransport> transport_;
+  std::unique_ptr<VescTransport> transport_;
   rclcpp::Subscription<VescCommandArray>::SharedPtr cmd_sub_;
   rclcpp::Service<Reboot>::SharedPtr reboot_srv_;
   rclcpp::TimerBase::SharedPtr state_timer_;

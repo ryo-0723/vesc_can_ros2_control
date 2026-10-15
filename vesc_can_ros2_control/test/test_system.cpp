@@ -130,9 +130,8 @@ TEST_F(SystemConfigurationTest, SupportsAllFiveModeInterfaces)
     SCOPED_TRACE(mode);
     auto params = make_parameters();
     auto &joint = params.hardware_info.joints[0];
-    const auto interface = mode == std::string("current_velocity") ? "velocity" : mode;
-    joint.command_interfaces[0].name = interface;
-    joint.state_interfaces[0].name = interface;
+    joint.command_interfaces[0].name = mode;
+    joint.state_interfaces[0].name = mode == std::string("current_velocity") ? "velocity" : mode;
     joint.parameters["control_mode"] = mode;
     if (mode == std::string("current_velocity")) {
       joint.parameters["startup_current_a"] = "2.0";
@@ -143,6 +142,28 @@ TEST_F(SystemConfigurationTest, SupportsAllFiveModeInterfaces)
   }
 }
 
+TEST_F(SystemConfigurationTest, HybridHasItsOwnCommandInterfaceAndVelocityFeedback)
+{
+  auto params = make_parameters();
+  auto &joint = params.hardware_info.joints[0];
+  joint.command_interfaces[0].name = "current_velocity";
+  joint.parameters["startup_current_a"] = "2.0";
+  // With no explicit mode, the dedicated command interface selects hybrid control.
+  VescSystem inferred;
+  ASSERT_EQ(inferred.init(params), hardware_interface::CallbackReturn::SUCCESS);
+  joint.parameters["control_mode"] = "velocity";
+  VescSystem wrong_mode;
+  EXPECT_EQ(wrong_mode.init(params), hardware_interface::CallbackReturn::ERROR);
+  joint.parameters["control_mode"] = "current_velocity";
+  joint.command_interfaces[0].name = "velocity";
+  VescSystem old_interface;
+  EXPECT_EQ(old_interface.init(params), hardware_interface::CallbackReturn::ERROR);
+  joint.command_interfaces[0].name = "current_velocity";
+  joint.state_interfaces[0].name = "current";
+  VescSystem missing_velocity;
+  EXPECT_EQ(missing_velocity.init(params), hardware_interface::CallbackReturn::ERROR);
+}
+
 TEST_F(SystemConfigurationTest, RejectsMismatchedOrIncompleteHybridSettings)
 {
   auto params = make_parameters();
@@ -150,6 +171,7 @@ TEST_F(SystemConfigurationTest, RejectsMismatchedOrIncompleteHybridSettings)
   VescSystem wrong_interface;
   EXPECT_EQ(wrong_interface.init(params), hardware_interface::CallbackReturn::ERROR);
   params.hardware_info.joints[0].parameters["control_mode"] = "current_velocity";
+  params.hardware_info.joints[0].command_interfaces[0].name = "current_velocity";
   VescSystem no_startup;
   EXPECT_EQ(no_startup.init(params), hardware_interface::CallbackReturn::ERROR);
   params.hardware_info.joints[0].parameters["startup_current_a"] = "2.0";

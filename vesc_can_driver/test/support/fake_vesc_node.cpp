@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
-#include "vesc_can_driver/vesc_driver.hpp"
-#include "vesc_can_driver/vesc_protocol.hpp"
+#include "vesc_can_driver/can_protocol.hpp"
+#include "vesc_can_driver/driver_core.hpp"
 
 namespace vesc_can_driver
 {

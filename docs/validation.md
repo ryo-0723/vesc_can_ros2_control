@@ -710,3 +710,52 @@ ROS 2 Lyricalの専用コンテナで、ドライバ単独とhardware pluginを�
 通常ノードとros2_controlの基本例も起動し、指令とフィードバックを確認しています
 C++のclang-format、Python構文、YAML・URDFの読み込みと更新した文書のリンクを検査しました
 実機CANとモータでの検証は行っていません
+
+
+## 単体制御と複数台管理の分離（2026-10-15）
+
+vesc_driver.hpp / cpp内でMotorControllerとDriverCoreの責務を分けました
+MotorControllerが1台分の設定・状態・指令、STATUSの更新、5モードのフレーム生成を担当します
+DriverCoreはモータ一覧、受信先の振り分け、全台の準備確認・動作許可・停止を担当します
+設定・状態をDriverCoreの別配列には保持せず、各MotorControllerから参照します
+
+速度制御のcommand interfaceはvelocity、速度＋電流制御はcurrent_velocityに分けました
+両モードの速度state interfaceはvelocity、単位は関節rad/sです
+URDFとcontroller YAML、設定検査と説明も更新しています
+
+ROS 2 Lyricalの専用コンテナで、ドライバ単独とros2_controlをビルドし、最終ビルドのコンパイル警告は0件でした
+77ケースが成功し、colcon集計は83件、エラー・失敗・スキップは0件です
+追加した単体テストでは、モータごとの設定・状態・指令の独立性、別CAN IDと不正フレームの無視、電流始動のリセットと期限、current_velocity専用指令とvelocity状態の整合性を確認しました
+既存の5モード・異常停止・再起動・CAN指令100 Hz・状態50 Hz・複数インスタンス・hardware lifecycleのテストも通っています
+
+再起動テストは、送信済みでDDSの受信待ちだった指令を再起動後の指令と誤判定しないよう、再起動パケット以降の受信列で旧指令の再送がないことを確認します
+C++のclang-format、YAML・URDFの読み込み、指令と状態interfaceの整合性、更新文書のリンクを検査しました
+実機CANとモータでの検証は行っていません
+
+
+## CAN / UARTを分ける通信インターフェース（2026-10-15）
+
+単体クラスをmotor_controller.hpp / cpp、複数台のラッパーをvesc_driver.hpp / cppへ分けました
+通信方式に依存しないVescCommand・VescFeedbackとVescInterfaceを追加し、共通の周期処理をVescTransportへ、ROS CANトピックとCANの変換処理をCanInterfaceへ分離しました
+既存のCANフレーム生成・デコードはvesc_protocolで使用しています
+CANの故障問い合わせに対する応答確認もCanInterface側へ移し、他の通信方式では検証済みの故障コードを直接通知できるようにしています
+単体の期限・故障・不正指令の検査と停止保持はMotorControllerで完結し、DriverCoreが異常を全台停止へ広げます
+
+最終コードをROS 2 Lyricalの専用コンテナでビルドし、コンパイル警告は0件でした
+82ケースが成功し、colcon集計は89件、エラー・失敗・スキップは0件です
+CANに依存しないテスト用通信実装を差し込み、5モード、別スレッドからの受信、送信中の同期応答、問い合わせなしの故障通知、再起動要求、別インスタンスの独立性と受信処理の終了を確認しました
+単体クラスだけでも期限・故障でゼロ電流を返し、正常な受信や新指令だけでは停止保持を解除しないことを確認しています
+既存のCAN・ros2_control・周期配信・複数ノード・再起動のテストも成功しました
+
+モータ制御とDriverCoreは、ホストのg++ -std=c++20でROS / CANのヘッダやライブラリなしにビルドし、受信・動作許可・指令生成まで実行しました
+全C++のclang-format、YAML・URDF、更新文書のリンクとgit diff --checkも検査しました
+UARTの送受信実装は未追加です。実機CAN・UART・モータでの検証は行っていません
+
+
+## C++ファイル名の整理（2026-10-15）
+
+vesc_driver.hpp / cppをdriver_core.hpp / cpp、vesc_protocol.hpp / cppをcan_protocol.hpp / cppへ変更しました
+include、CMakeのソースパス、現在の説明とリンクを更新しています。以前の検証記録には検証時点の名前を残しています
+クリーン環境でドライバ単独・ros2_controlのビルドとインストールを確認し、旧名のヘッダが入らないことも確認しました
+colcon集計89件すべて成功し、エラー・失敗・スキップとコンパイル警告は0件です
+clang-format、文書リンクとgit diff --checkも通っています

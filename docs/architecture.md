@@ -1,115 +1,106 @@
 # 内部構成
 
-## フォルダとファイル
+## ファイルの分担
 
-3パッケージに分け、msgを使う上位ノードがドライバに依存しない構成にしています
-通常ノードとros2_controlは、CAN通信と状態配信の実装を共用します
-
-| フォルダ | 内容 |
-|---|---|
-| vesc_can_msgs/msg・srv | 指令・状態・エラー・再起動の型 |
-| 各パッケージのsrc・include | 実装と公開ヘッダ |
-| 各パッケージのlaunch | 起動ファイル |
-| 各パッケージのexamples | 基本構成と5モードのYAML・URDF |
-| 各パッケージのtest | 単体テストと統合テスト |
-| docs | 使い方の詳細と検証記録 |
-
-ドライバは最初の3ファイル、ros2_controlは最後の1ファイルに分けています
+msgだけを使う上位ノードは `vesc_can_msgs` に依存します
+通常ノードとros2_controlは、同じモータ制御と通信管理を使います
 
 | ファイル | 役割 |
 |---|---|
-| [vesc_protocol.cpp](../vesc_can_driver/src/vesc_protocol.cpp) | VESCのCAN ID・ペイロード形式、フレームの生成とデコード |
-| [vesc_driver.cpp](../vesc_can_driver/src/vesc_driver.cpp) | モータ設定、単位変換、制御判断、CAN通信と周期送信 |
-| [vesc_node.cpp](../vesc_can_driver/src/vesc_node.cpp) | 通常ノードと、両方式で共用する状態変換・状態とエラーの配信 |
-| [vesc_system.cpp](../vesc_can_ros2_control/src/vesc_system.cpp) | ros2_controlの設定、lifecycle、state / command interface |
+| [motor_controller.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/motor_controller.hpp) | 1台分の設定・状態・指令、単位変換、5モード、期限と異常の検査 |
+| [driver_core.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/driver_core.hpp) | MotorControllerの一覧を持つラッパー、受信先の振り分け、全台の動作許可・停止 |
+| [vesc_interface.hpp](../vesc_can_driver/include/vesc_can_driver/vesc_interface.hpp) | 通信方式に依存しない指令・受信値とVescInterface |
+| [vesc_transport.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/vesc_transport.hpp) | VescTransport、周期処理、最新指令、スレッド間の受け渡し |
+| [can_interface.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/can_interface.hpp) | VescInterfaceのCAN実装、ROSのCANトピック、故障応答の対応確認 |
+| [can_protocol.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/can_protocol.hpp) | CANのID・ペイロード形式、フレームの生成とデコード |
+| [vesc_node.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/vesc_node.hpp) | 通常ノード、共通の状態・エラー配信 |
+| [vesc_system.hpp / cpp](../vesc_can_ros2_control/include/vesc_can_ros2_control/vesc_system.hpp) | ros2_controlのinterfaceとlifecycle |
 
-公開ヘッダはドライバの `vesc_protocol.hpp`、`vesc_driver.hpp`、`vesc_node.hpp` と、pluginの `vesc_system.hpp` です
-ヘッダにクラスの宣言、cppに実装を置きます
-`vesc_main.cpp` は通常ノードを生成してspinするだけの起動入口です
-`vesc_can_driver::node` は通常ノードと共通publisherのライブラリで、hardware pluginは通常ノードを起動せずpublisherだけを使います
-模擬VESCは `test/support/fake_vesc_node.cpp` に置き、`use_mock` の動作確認にも使うため、BUILD_TESTING=OFFでもインストールします
+ヘッダに宣言、cppに実装を置きます
+`vesc_main.cpp` は通常ノードを生成してspinする起動入口です
+模擬VESCは `test/support/fake_vesc_node.cpp`、設定例は各パッケージの `examples` に置いています
 
-## 所有関係と複数起動
-
-`VescNode` と `VescSystem` は、それぞれ自分の `CanTransport` と `MotorStatePublisher` を所有します
-`unique_ptr` はそのインスタンスの所有者が1つであることを表し、ノードの起動数を制限しません
-状態配信は通常ノードとhardware pluginで共用し、CAN通信側にはROSの状態msgを持ち込まない構成です
-
-トピックの既定値は相対名です
-たとえばnamespaceが `/front` なら、`vesc/commands` は `/front/vesc/commands` になります
-同じnamespaceでノード名だけ変えても指令・状態トピックは共通になるため、独立運用ではnamespaceを分けます
-通常ノードの内部通信ノード名は `<ノード名>_can_io`、hardware側は `<hardware名>_can_io` です
-hardware名は同じcontroller_manager内で一意にします
-
-CANブリッジを共有する場合は、両方の設定で同じ絶対CANトピックを指定します
-その場合、物理CAN IDはノードをまたいで重複させず、同じモータを複数のノードから操作しません
-論理motor_idは独立したnamespace間なら同じ値を使用できます
-
-## 処理の流れ
+## 所有関係
 
 ```mermaid
-flowchart LR
-  N[通常ノード: 指令配列] --> M[モータごとの最新指令]
-  H[ros2_control: write] --> M
-  M --> T[CanTransport: CAN用executor]
-  T --> D[DriverCore: 制御・期限判定]
-  D --> P[vesc_protocol: フレーム生成]
-  P --> B[CANブリッジ]
-  B --> V[VESC]
-  V --> B
-  B --> T
-  T --> S[受信状態]
-  S --> R[ros2_control: read]
-  S --> U[状態の周期配信]
-  T --> E[異常時の /vesc/event]
+flowchart TD
+  N[通常ノード / VescSystem] --> T[VescTransport]
+  T --> D[DriverCore: 複数台の管理]
+  D --> M[MotorController: 1台分の制御]
+  T --> I[VescInterface]
+  I --> C[CanInterface: 実装済み]
+  I -.-> U[UART実装: 今後追加]
+  C --> P[CANプロトコルとROS CANトピック]
 ```
 
-通常ノードは指令の受信と状態配信をメインexecutorで処理し、CAN用executorを別スレッドで動かします
-hardware pluginも内部にCAN I/Oノードと専用executorを1つ持ち、モータごとのスレッドは作りません
-通常ノードとhardware pluginは、同じモータに対してどちらかを使います
+VescTransportがDriverCoreと、選択した通信実装を所有します
+DriverCoreは `vector<MotorController>` を所有し、各モータが設定・状態・指令を1組ずつ持ちます
+CAN実装はモータ一覧を所有せず、共通指令と受信値の変換を担当します
+このため、通信方式を交換しても単体・複数台の制御を共用できます
 
-`DriverCore` は状態更新とモードごとの制御、`CanTransport` は通信と最新指令の受け渡しを担当します
-5モードのフレーム生成は `make_frame()` にまとめ、電流・始動・停止の電流フレーム生成を共用します
-速度制御と電流始動後の速度制御も、同じ変化率制限とERPM変換を使います
+通常ノードとhardware pluginは、それぞれ自分のVescTransportとMotorStatePublisherを所有します
+`unique_ptr` は各インスタンスの所有者を表し、ノードの起動数を制限しません
+状態配信のクラスは共用し、hardware pluginから通常ノードを起動することはありません
 
+## CANとUARTの境界
+
+MotorControllerはCANフレームを返しません
+`VescCommand` に接続先ID、電流・ERPM・PID角度・duty比などの操作と値を入れます
+CanInterfaceがCANフレームに変換して送り、受信したCANフレームはデコード済みの `VescFeedback` に戻します
+単体制御とDriverCoreは、ROSノードやCANのmsgをincludeせずビルドできます
+
+UARTを追加するときはVescInterfaceを実装し、通常ノードやhardware pluginで生成する通信実装を交換します
+差し替えは生成時に行います。UARTでは接続先IDとシリアルポートの対応も通信実装で管理します
+現在のYAML・URDFとlaunchはCAN用です。UARTのポート設定や送受信実装はまだ追加していません
+UART実装ではCOMMコマンドの生成、長さ・CRC・終端を含むパケット処理、受信値の変換が必要です
+CANのフレーム全体をUARTへ流すことはできません → [公式packet.c](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/packet.c)
+
+VescInterfaceの約束は次の通りです
+
+- `configure_targets()`：接続先を登録し、通信方式ごとのIDや接続設定を検査する
+- `start()`：受信値とエラーの通知先を設定し、受信処理を始める
+- `send()`：共通指令を変換して送る。送信中に受信を通知してもよい
+- `stop()`：受信処理を終了し、戻った後は通知しない。独自スレッドがあればjoinする
+
+受信値は、速度・電流・duty、温度・PID角、積算角用カウントなどのブロックで通知します
+UARTの応答を分けて通知する場合も、取得できた項目だけを渡し、欠測項目をゼロで補いません
+内部の `status1_at` などは対応するブロックの受信時刻です
+故障コードは通信実装が応答の妥当性を確認してから通知します
+CANでは問い合わせ中の宛先と受信期限を照合し、UART固有の受信処理へCANの照合条件を持ち込みません
+
+## 単体制御と全台停止
+
+MotorControllerの `command()` は、必須フィードバック、指令期限、モードの制限を検査します
+異常時は理由と、そのモータのゼロ電流指令を返して停止を保持します
+不正指令や電流起動の失敗も単体で処理し、新しい指令だけで停止を解除しません
+`reset_command(now)` は旧指令と停止保持を解除し、初回指令までの期限の起点を設定します
+本体故障が残っていれば動作できず、健康な応答と明示的な復旧操作が必要です
+
+DriverCoreは単体の結果をまとめ、1台が異常なら登録された全台を停止します
+その周期で既に生成していた動作指令もゼロ電流に置き換えます
+全台操作はこのDriverCore内だけが対象で、別ノードや別hardware componentには作用しません
+`activate()` はPC側の動作許可です。VESCのCAN有効化パケットは送りません
+
+## 周期処理とros2_control
+
+VescTransportは専用executorを1つ持ち、100 Hzで最新指令を取り出して送ります
 通常ノードの `set_commands()` は配列全体を検査し、1回のロックと同じ受信時刻で指定モータを更新します
-未送信の値は上書きし、未指定モータの値と期限は維持します
-CAN用executorが100 Hzで最新指令を取り出し、フレーム生成とCANトピックへの配信を順に行います
+未送信値は上書きし、未指定モータの指令と期限は維持します
+状態トピックとJointStateは50 Hz、ros2_controlのstate interfaceは100 Hzです
 
-## 設定と状態
+hardwareのread/writeは事前確保した配列をtry-lockで受け渡し、ROS配信や通信待機を行いません
+競合時は次周期へ延期し、前回状態にも鮮度判定を適用します
+問い合わせや送信は状態ロックを解放してから通信実装へ渡すため、その場で受信通知されてもロックを待ち合いません
+この構成で実行周期を保証するものではなく、実機負荷での確認は必要です
 
-`MotorConfig` は論理 `motor_id` とCANの `controller_id` を別に保持します
-論理IDはYAMLまたはURDFの `logical_id` から読み込みます
-`MotorState::pos_rad` / `vel_rad_s` は関節単位、`electrical_rpm` / `pid_pos_deg` などはVESCの生値です
-局所変数の `cfg` は設定、`opts` は通信設定、`idx` はモータの添字を表します
+## 複数起動と終了
 
-STATUSと指令の受信時刻は `optional<TimePoint>` で保持し、未受信と時刻ゼロを区別します
-期限は単調時刻で判定し、ROSのstampはメッセージに付ける時刻として使います
-状態は起動時に確保した配列へコピーし、競合した周期は前回値に鮮度判定を適用します
-公開する浮動値は、未受信・期限切れならNaNです
+既定トピックは相対名です
+namespaceが `/front` なら、`vesc/commands` は `/front/vesc/commands` になります
+ノード名だけ変えても指令・状態トピックは共通なので、独立運用ではnamespaceを分けます
+CANブリッジを共有するときは同じ絶対CANトピックを指定し、物理CAN IDを重複させません
+同じモータを複数のノードから操作しない構成にします
 
-CAN指令は100 Hz、状態トピックは50 Hzです
-ros2_controlのstate interfaceは100 Hzで読み取り、JointStateは50 Hzで配信します
-位置制御のposition stateはSTATUS4、それ以外はSTATUS5の積算角を使います
-内部計算とstate interfaceはdouble、公開msgの監視値はfloat32です
-
-## ros2_controlとの境界
-
-hardwareのread/writeは、事前確保した状態と指令を待機しないtry-lockで受け渡します
-競合時は状態の更新や指令の受け渡しを次周期へ延期し、期限の判定は続けます
-ROSの配信とネットワーク待機はCAN用executorへ分けています
-この構成で実行周期を保証するものではなく、実機の負荷に合わせた確認が必要です
-
-## 停止と終了
-
-`ready()` は必要なSTATUSの鮮度、`activate()` はPC側の動作許可を管理します
-CANのencode/decodeやSTATUSの受信だけなら動作許可は不要です
-異常時は全台にゼロ電流を送り、停止を保持します
-通常ノードはreboot、hardware pluginはlifecycleで復旧します
-
-異常通知は状態ロックの外で `on_fault` を呼び、`MotorStatePublisher` がmotor_idと理由を配信します
-本体故障は該当ID、PC側の全台停止は影響する全IDに通知します
-hardwareのread/writeは停止を要求し、CAN用executorが通知を処理します
-
-終了時はCAN用executorを停止・joinしてから、状態とpublisherを破棄します
-controller_managerのexecutorは止めず、pluginが持つ通信スレッドだけを終了します
+終了時は周期処理を停止・joinし、停止指令の送信を試みてから通信実装を終了します
+通信実装の受信処理も終了してからpublisherを破棄します
+controller_managerのexecutorは止めず、自分が所有する通信処理だけを終了します

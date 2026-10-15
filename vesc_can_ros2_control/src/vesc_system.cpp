@@ -130,15 +130,18 @@ vesc_can_driver::MotorConfig VescSystem::load_joint_config(
   cfg.command_timeout =
     std::chrono::milliseconds(get_integer_parameter(params, "command_timeout_ms", 500));
 
-  bool has_cmd_state = false;
+  const auto feedback_interface = cfg.mode == vesc_can_driver::ControlMode::CurrentVelocity
+                                    ? std::string("velocity")
+                                    : command_interface;
+  bool has_feedback_state = false;
   for (const auto &state_if : joint.state_interfaces) {
     const auto state_field = state_field_from_name(state_if.name);
-    has_cmd_state = has_cmd_state || state_if.name == command_interface;
+    has_feedback_state = has_feedback_state || state_if.name == feedback_interface;
     if (cfg.mode != vesc_can_driver::ControlMode::Position && state_field == StateField::Position) {
       cfg.require_tachometer = true;
     }
   }
-  if (!has_cmd_state) {
+  if (!has_feedback_state) {
     throw std::invalid_argument(joint.name + ": missing matching state interface");
   }
   return cfg;
@@ -153,14 +156,15 @@ hardware_interface::CallbackReturn VescSystem::on_init(
   try {
     const auto &hw_info = params.hardware_info;
     const auto &hw_params = hw_info.hardware_parameters;
-    opts_.tx_topic = get_string_parameter(hw_params, "can_tx_topic", "can/tx");
-    opts_.rx_topic = get_string_parameter(hw_params, "can_rx_topic", "can/rx");
+    can_opts_.tx_topic = get_string_parameter(hw_params, "can_tx_topic", "can/tx");
+    can_opts_.rx_topic = get_string_parameter(hw_params, "can_rx_topic", "can/rx");
     opts_.send_period =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "send_period_ms", 10));
     opts_.fault_period =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "fault_poll_period_ms", 100));
     activation_timeout_ =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "activation_timeout_ms", 2000));
+    can_opts_.fault_reply_timeout = opts_.fault_period;
     state_period_ =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "state_publish_period_ms", 20));
     if (opts_.send_period.count() <= 0 || activation_timeout_.count() <= 0 ||
@@ -218,7 +222,8 @@ hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecyc
       get_string_parameter(get_hardware_info().hardware_parameters, "error_topic", "vesc/event");
     state_pub_ =
       std::make_unique<vesc_can_driver::MotorStatePublisher>(*can_node, configs_, error_topic);
-    transport_ = std::make_unique<vesc_can_driver::CanTransport>(configs_, opts_, can_node,
+    transport_ = std::make_unique<vesc_can_driver::VescTransport>(configs_, opts_, can_node,
+      std::make_unique<vesc_can_driver::CanInterface>(can_node, can_opts_, configs_.size()),
       [pub = state_pub_.get()](
         const vesc_can_driver::DriverFault &fault) { pub->publish_error(fault); });
     state_timer_ =

@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "hardware_interface/system_interface.hpp"
-#include "vesc_can_driver/vesc_driver.hpp"
+#include "vesc_can_driver/driver_core.hpp"
 #include "vesc_can_driver/vesc_node.hpp"
 
 namespace vesc_can_ros2_control
@@ -80,11 +80,12 @@ private:
   std::vector<hardware_interface::CommandInterface::SharedPtr> cmd_handles_;
   std::vector<StateHandle> state_handles_;
   vesc_can_driver::TransportOptions opts_;
+  vesc_can_driver::CanOptions can_opts_;
   std::chrono::milliseconds activation_timeout_{2000};
   std::chrono::milliseconds state_period_{20};
   // Transport must join its callbacks before publishers are destroyed.
   std::unique_ptr<vesc_can_driver::MotorStatePublisher> state_pub_;
-  std::unique_ptr<vesc_can_driver::CanTransport> transport_;
+  std::unique_ptr<vesc_can_driver::VescTransport> transport_;
   rclcpp::TimerBase::SharedPtr state_timer_;
   bool active_{false};
 };

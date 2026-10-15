@@ -250,3 +250,29 @@ ros2_control の URDF には全 joint に一意の logical_id を追加します
 以前の `vesc_state.hpp` を使っている場合はincludeを変更し、CMakeでは `vesc_can_driver::node` にリンクします
 トピックの既定値と設定例は相対名になり、namespaceを指定するとその配下に配置されます
 namespaceなしの起動では従来の `/vesc/commands`・`/vesc/state`・`/vesc/event` を使用します
+
+速度＋電流モードのcommand interfaceは `current_velocity` です
+URDFのcommand interfaceとforward controllerの `interface_name` を揃えてください
+速度制御のcommand interfaceは `velocity` のままで、両モードの速度state interfaceは `velocity` です
+指令・速度フィードバックの単位はどちらも関節rad/sです
+
+DriverCoreの設定・状態の参照は `motors()[i].config()` / `motors()[i].state()` に変更しました
+`motor_configs()` / `states()` は廃止し、各MotorControllerが設定・状態を所有します
+動作許可・異常の取得は `is_active()` / `is_faulted()` を使います
+
+## 通信方式を分けるC++ API
+
+単体の制御は `motor_controller.hpp`、複数台のラッパーは `driver_core.hpp`、通信管理は `vesc_transport.hpp` です
+従来のCanTransportはVescTransportへ変更し、コンストラクタにVescInterfaceの実装を渡します
+CANトピック名はCanOptions、送信・故障問い合わせの周期はTransportOptionsに分けています
+MotorControllerの `command()` はVescCommandを返し、DriverCoreは `commands()` で配列にまとめます
+受信にはCANフレームではなく、デコード済みのVescFeedbackを渡します
+CANのフレーム処理には `can_protocol.hpp` とcomm_can_set_*を使います
+ROSのmsg、トピック名、YAML・URDFのパラメータ名は変更していません
+UARTの追加時に必要な処理は [内部構成](architecture.md#canとuartの境界) にまとめています
+
+## C++ファイル名の整理
+
+`vesc_driver.hpp / cpp` は `driver_core.hpp / cpp`、`vesc_protocol.hpp / cpp` は `can_protocol.hpp / cpp` へ変更しました
+外部から使用している場合はincludeのファイル名を変更してください
+namespace、クラス名、CMakeの `vesc_can_driver::driver` / `vesc_can_driver::protocol` は同じです

@@ -122,8 +122,9 @@ VescNode::VescNode(const rclcpp::NodeOptions &options) : rclcpp::Node("vesc_can_
 {
   motor_idx_.fill(-1);
   TransportOptions opts;
-  opts.tx_topic = declare_parameter<std::string>("can_tx_topic", "can/tx");
-  opts.rx_topic = declare_parameter<std::string>("can_rx_topic", "can/rx");
+  CanOptions can_opts;
+  can_opts.tx_topic = declare_parameter<std::string>("can_tx_topic", "can/tx");
+  can_opts.rx_topic = declare_parameter<std::string>("can_rx_topic", "can/rx");
   opts.send_period =
     std::chrono::milliseconds(declare_parameter<std::int64_t>("update_period_ms", 10));
   opts.fault_period =
@@ -147,7 +148,8 @@ VescNode::VescNode(const rclcpp::NodeOptions &options) : rclcpp::Node("vesc_can_
   states_.resize(configs_.size());
   initialize_command_interfaces();
   initialize_state_publishers(state_period);
-  initialize_can_transport(opts);
+  can_opts.fault_reply_timeout = opts.fault_period;
+  initialize_can_transport(opts, can_opts);
 }
 
 /// @brief モータ名を接頭辞に持つ ROS パラメータから設定を読み込む
@@ -206,13 +208,14 @@ MotorConfig VescNode::load_motor_config(const std::string &motor_name)
 }
 
 /// @brief 同じ namespace / context で通信ノードと専用 executor を起動する
-void VescNode::initialize_can_transport(const TransportOptions &opts)
+void VescNode::initialize_can_transport(const TransportOptions &opts, const CanOptions &can_opts)
 {
   auto node_opts = rclcpp::NodeOptions().use_global_arguments(false);
   node_opts.context(get_node_base_interface()->get_context());
   auto can_node =
     std::make_shared<rclcpp::Node>(std::string(get_name()) + "_can_io", get_namespace(), node_opts);
-  transport_ = std::make_unique<CanTransport>(configs_, opts, can_node,
+  transport_ = std::make_unique<VescTransport>(configs_, opts, can_node,
+    std::make_unique<CanInterface>(can_node, can_opts, configs_.size()),
     [pub = state_pub_.get()](const DriverFault &fault) { pub->publish_error(fault); });
   transport_->start();
 }

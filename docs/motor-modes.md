@@ -146,7 +146,7 @@ control_mode と command_interface は読み取り専用で、起動後の変更
 | velocity | velocity | VescCommand.value [rad/s] |
 | position | position | VescCommand.value [rad] |
 | duty_cycle | duty_cycle | VescCommand.value [比率 -1〜1] |
-| current_velocity | velocity | VescCommand.value [rad/s] |
+| current_velocity | current_velocity | VescCommand.value [rad/s] |
 
 ```yaml
 drive_joint:
@@ -202,7 +202,7 @@ ros2_control では各 joint に `control_mode` param と上表の command inter
 設定例は [vesc_five_modes.urdf](../vesc_can_ros2_control/examples/vesc_five_modes.urdf) と
 [controllers_five_modes.yaml](../vesc_can_ros2_control/examples/controllers_five_modes.yaml) です。
 電流の forward controller は `interface_name: current`、電流＋速度は
-`interface_name: velocity`、duty は `interface_name: duty_cycle` を指定します
+`interface_name: current_velocity`、duty は `interface_name: duty_cycle` を指定します
 
 ```bash
 ros2 launch vesc_can_ros2_control vesc_control.launch.py use_mock:=true \

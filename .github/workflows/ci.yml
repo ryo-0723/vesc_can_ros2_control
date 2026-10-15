@@ -32,6 +32,7 @@ jobs:
             ws/src/vesc_can_ros2_control/vesc_can_driver/src/*.cpp \
             ws/src/vesc_can_ros2_control/vesc_can_driver/test/*.cpp \
             ws/src/vesc_can_ros2_control/vesc_can_driver/test/support/*.cpp \
+            ws/src/vesc_can_ros2_control/vesc_can_driver/test/support/*.hpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/include/vesc_can_ros2_control/*.hpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/src/*.cpp \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test/*.cpp

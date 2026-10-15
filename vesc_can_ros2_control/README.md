@@ -3,6 +3,8 @@
 複数のVESCを、1つのros2_control SystemInterfaceで管理します
 controller_managerが `vesc_can_ros2_control/VescSystem` を読み込み、通常ノードは起動しません
 CAN通信と状態配信には `vesc_can_driver` を使います
+通信管理はVescTransport、実際のCAN送受信はCanInterfaceです
+別の通信方式はVescInterfaceの実装として追加できます。現在の設定例はCAN用です
 各Systemが通信スレッドとpublisherを所有し、cleanupで自分の通信だけを終了します
 
 ## 設定例
@@ -24,7 +26,8 @@ ros2 launch vesc_can_ros2_control vesc_control.launch.py \
 
 各jointにcommand interfaceを1つ指定します
 モードは `control_mode` で選び、省略した場合はcommand interfaceから決まります
-`current_velocity` は `velocity` interfaceを使います
+速度制御は `velocity`、速度＋電流制御は `current_velocity` command interfaceを使います
+どちらも速度のstate interfaceは `velocity`、指令・フィードバックの単位はrad/sです
 
 | 設定 | 意味 |
 |---|---|
@@ -41,7 +44,7 @@ ros2 launch vesc_can_ros2_control vesc_control.launch.py \
 
 同じモータを通常ノードで使う場合は、YAMLとURDFのlogical_idを揃えます
 ホストIDの設定は不要です。CAN ID 254は故障問い合わせの応答先に予約しています
-指令と同名のstate interfaceも登録します
+指令に対応するstate interfaceも登録します（`current_velocity` の場合は `velocity`）
 追加の状態には `position`、`velocity`、`current`、`duty_cycle`、`temperature_fet`、`temperature_motor`、`input_voltage` を指定できます
 
 車輪のオドメトリに使う設定例です

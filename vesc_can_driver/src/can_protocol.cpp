@@ -1,4 +1,4 @@
-#include "vesc_can_driver/vesc_protocol.hpp"
+#include "vesc_can_driver/can_protocol.hpp"
 
 #include <bit>
 #include <cmath>
@@ -211,5 +211,63 @@ bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status)
   status.adc_3_v = read_signed_16(frame, 4) / 1000.0;
   status.ppm = read_signed_16(frame, 6) / 1000.0;
   return true;
+}
+
+can_msgs::msg::Frame encode_command(const VescCommand &command)
+{
+  switch (command.type) {
+    case VescCommandType::Duty:
+      return comm_can_set_duty(command.controller_id, command.value);
+    case VescCommandType::Current:
+      return comm_can_set_current(command.controller_id, command.value);
+    case VescCommandType::Rpm:
+      if (!std::isfinite(command.value) ||
+          command.value < std::numeric_limits<std::int32_t>::min() ||
+          command.value > std::numeric_limits<std::int32_t>::max() ||
+          std::trunc(command.value) != command.value) {
+        throw std::out_of_range("RPM command must be an int32 ERPM value");
+      }
+      return comm_can_set_rpm(command.controller_id, static_cast<std::int32_t>(command.value));
+    case VescCommandType::Position:
+      return comm_can_set_pos(command.controller_id, command.value);
+    case VescCommandType::FaultRequest:
+      return make_fault_request(command.controller_id);
+    case VescCommandType::Reboot:
+      return make_reboot_frame(command.controller_id);
+  }
+  throw std::invalid_argument("Unsupported VESC command type");
+}
+
+std::optional<VescFeedback> decode_feedback(const can_msgs::msg::Frame &frame)
+{
+  Status1 s1;
+  Status2 s2;
+  Status3 s3;
+  Status4 s4;
+  Status5 s5;
+  Status6 s6;
+  FaultCode fault;
+  if (decode_status_1(frame, s1)) {
+    return s1;
+  }
+  if (decode_status_2(frame, s2)) {
+    return s2;
+  }
+  if (decode_status_3(frame, s3)) {
+    return s3;
+  }
+  if (decode_status_4(frame, s4)) {
+    return s4;
+  }
+  if (decode_status_5(frame, s5)) {
+    return s5;
+  }
+  if (decode_status_6(frame, s6)) {
+    return s6;
+  }
+  if (decode_fault_reply(frame, fault)) {
+    return fault;
+  }
+  return std::nullopt;
 }
 }  // namespace vesc_can_driver::protocol
