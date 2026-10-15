@@ -278,7 +278,7 @@ TEST_F(TransportTest, DefaultTimerRepeatsOneCommandAt100Hz)
   std::vector<TimePoint> samples;
   auto cmd_sub = peer->create_subscription<can_msgs::msg::Frame>(
     opts.tx_topic, 100, [&](can_msgs::msg::Frame::ConstSharedPtr frame) {
-      if (frame->data == protocol::make_set_current_frame(11, 2.0).data) {
+      if (frame->data == protocol::comm_can_set_current(11, 2.0).data) {
         samples.push_back(SteadyClock::now());
       }
     });
@@ -495,7 +495,7 @@ TEST_F(TransportTest, SelectivePollingRoutesDeviceFaultsAndNotifiesOnlyCodeChang
   transport.shutdown();
 }
 
-TEST_F(TransportTest, RejectsInvalidHostIdsAndIgnoresUnrequestedRepliesWhenPollingDisabled)
+TEST_F(TransportTest, RejectsReservedReplyIdAndIgnoresUnrequestedRepliesWhenPollingDisabled)
 {
   MotorConfig cfg;
   cfg.name = "drive";
@@ -506,11 +506,9 @@ TEST_F(TransportTest, RejectsInvalidHostIdsAndIgnoresUnrequestedRepliesWhenPolli
   TransportOptions opts;
   opts.tx_topic = "/disabled_fault_test/tx";
   opts.rx_topic = "/disabled_fault_test/rx";
-  for (std::uint8_t host : {11, 255}) {
-    opts.host_id = host;
-    EXPECT_THROW(CanTransport({cfg}, opts, can_node), std::invalid_argument);
-  }
-  opts.host_id = 254;
+  cfg.controller_id = 254;
+  EXPECT_THROW(CanTransport({cfg}, opts, can_node), std::invalid_argument);
+  cfg.controller_id = 11;
   opts.fault_period = -1ms;
   EXPECT_THROW(CanTransport({cfg}, opts, can_node), std::invalid_argument);
   opts.fault_period = 0ms;
@@ -591,7 +589,7 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
   ASSERT_TRUE(wait_for(
     [&]() {
       return std::any_of(frames.begin(), frames.end(), [](const auto &frame) {
-        return frame.id == 0x10B && frame.data == protocol::make_set_current_frame(11, 1.0).data;
+        return frame.id == 0x10B && frame.data == protocol::comm_can_set_current(11, 1.0).data;
       });
     },
     100ms));

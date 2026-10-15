@@ -157,11 +157,6 @@ hardware_interface::CallbackReturn VescSystem::on_init(
     opts_.rx_topic = get_string_parameter(hw_params, "can_rx_topic", "/can/rx");
     opts_.send_period =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "send_period_ms", 10));
-    const auto host_id = get_integer_parameter(hw_params, "host_can_id", 254);
-    if (host_id > 254) {
-      throw std::invalid_argument("Host CAN ID must be in [0, 254]");
-    }
-    opts_.host_id = static_cast<std::uint8_t>(host_id);
     opts_.fault_period =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "fault_poll_period_ms", 100));
     activation_timeout_ =

@@ -213,7 +213,7 @@ namespace
 /// @brief 関節方向の電流 [A] を VESC 方向へ変換して指令フレームを作る
 can_msgs::msg::Frame make_current_frame(const MotorConfig &cfg, double current_a)
 {
-  return protocol::make_set_current_frame(cfg.controller_id, apply_direction(cfg, current_a));
+  return protocol::comm_can_set_current(cfg.controller_id, apply_direction(cfg, current_a));
 }
 }  // namespace
 
@@ -426,9 +426,9 @@ std::optional<can_msgs::msg::Frame> DriverCore::make_frame(std::size_t idx, Time
     case ControlMode::Current:
       return make_current_frame(cfg, cmd.target);
     case ControlMode::DutyCycle:
-      return protocol::make_set_duty_frame(cfg.controller_id, apply_direction(cfg, cmd.target));
+      return protocol::comm_can_set_duty(cfg.controller_id, apply_direction(cfg, cmd.target));
     case ControlMode::Position:
-      return protocol::make_set_position_frame(cfg.controller_id, pos_to_deg(cfg, cmd.target));
+      return protocol::comm_can_set_pos(cfg.controller_id, pos_to_deg(cfg, cmd.target));
     case ControlMode::CurrentVelocity: {
       const auto &state = states_[idx];
       const double rpm_per_vel = cfg.gear_ratio * 60.0 / (2.0 * kPi);
@@ -456,7 +456,7 @@ std::optional<can_msgs::msg::Frame> DriverCore::make_frame(std::size_t idx, Time
       cmd.ramp_vel += std::clamp(cmd.target - cmd.ramp_vel, -max_step, max_step);
       const auto electrical_rpm =
         static_cast<std::int32_t>(std::llround(vel_to_erpm(cfg, cmd.ramp_vel)));
-      return protocol::make_set_rpm_frame(cfg.controller_id, electrical_rpm);
+      return protocol::comm_can_set_rpm(cfg.controller_id, electrical_rpm);
     }
   }
   stop_on_error(cfg.name + ": unsupported control mode");
@@ -473,10 +473,12 @@ CanTransport::CanTransport(std::vector<MotorConfig> configs, TransportOptions op
       opts_.rx_topic.empty() || opts_.tx_topic == opts_.rx_topic) {
     throw std::invalid_argument("Invalid CAN transport node, topics or period");
   }
-  if (opts_.fault_period.count() < 0 || opts_.host_id == protocol::kBroadcastControllerId ||
-      std::any_of(core_.motor_configs().begin(), core_.motor_configs().end(),
-        [this](const MotorConfig &cfg) { return cfg.controller_id == opts_.host_id; })) {
-    throw std::invalid_argument("Fault query period must be non-negative and host CAN ID unique");
+  if (opts_.fault_period.count() < 0) {
+    throw std::invalid_argument("Fault query period must be non-negative");
+  }
+  if (std::any_of(core_.motor_configs().begin(), core_.motor_configs().end(),
+        [](const MotorConfig &cfg) { return cfg.controller_id == protocol::kReplyCanId; })) {
+    throw std::invalid_argument("CAN ID 254 is reserved for fault replies");
   }
 
   cmd_frames_.reserve(core_.motor_configs().size());
@@ -707,8 +709,7 @@ void CanTransport::send_commands()
     const auto now = SteadyClock::now();
     if (reboot_idx_) {
       const auto idx = *reboot_idx_;
-      reboot_frame =
-        protocol::make_reboot_frame(core_.motor_configs()[idx].controller_id, opts_.host_id);
+      reboot_frame = protocol::make_reboot_frame(core_.motor_configs()[idx].controller_id);
       core_.reset(idx);
       fault_requests_[idx].reset();
       // Discard queued pre-reboot feedback while the VESC restarts.
@@ -771,7 +772,7 @@ void CanTransport::poll_faults()
     if (SteadyClock::now() < rx_after_[idx]) {
       continue;
     }
-    auto frame = protocol::make_fault_request(configs[idx].controller_id, opts_.host_id);
+    auto frame = protocol::make_fault_request(configs[idx].controller_id);
     fault_requests_[idx] = SteadyClock::now();
     frame.header.stamp = can_node_->now();
     tx_pub_->publish(frame);
@@ -789,7 +790,7 @@ void CanTransport::receive_frame(const can_msgs::msg::Frame &frame)
   std::optional<DriverFault> event;
   {
     std::lock_guard<std::mutex> state_lock(state_mutex_);
-    if (protocol::decode_fault_reply(frame, opts_.host_id, device_fault)) {
+    if (protocol::decode_fault_reply(frame, device_fault)) {
       const auto &configs = core_.motor_configs();
       const auto cfg =
         std::find_if(configs.begin(), configs.end(), [&device_fault](const MotorConfig &motor) {
@@ -852,7 +853,7 @@ void CanTransport::publish_frames()
   for (auto &frame : cmd_frames_) {
     // A concurrent deactivate must not leave a previously prepared motion command in flight.
     if (stop_requested_.load()) {
-      frame = protocol::make_set_current_frame(
+      frame = protocol::comm_can_set_current(
         static_cast<std::uint8_t>(frame.id & protocol::kControllerIdMask), 0.0);
     }
     frame.header.stamp = can_node_->now();

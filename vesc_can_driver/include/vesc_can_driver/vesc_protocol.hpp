@@ -7,6 +7,8 @@
 namespace vesc_can_driver::protocol
 {
 constexpr std::uint8_t kBroadcastControllerId = 255;
+// Selective 故障応答の宛先に予約する固定 ID（モータには割り当てない）
+constexpr std::uint8_t kReplyCanId = 254;
 constexpr std::uint32_t kControllerIdMask = 0xFF;
 constexpr std::uint32_t kPacketIdShift = 8;
 constexpr std::uint32_t kExtendedCanIdMask = 0x1FFFFFFF;
@@ -34,20 +36,19 @@ struct FaultCode
 };
 
 /// @brief CAN の short buffer で VESC 故障コードだけを問い合わせる
-/// @param host_id 応答先となる PC の CAN ID（他の機器と重複不可）
-/// @throws std::invalid_argument ID が 255 または送受信 ID が同一
-can_msgs::msg::Frame make_fault_request(std::uint8_t controller_id, std::uint8_t host_id);
+/// @note 応答先は kReplyCanId に固定
+/// @throws std::invalid_argument ID が予約済みの 254 または broadcast の 255
+can_msgs::msg::Frame make_fault_request(std::uint8_t controller_id);
 
 /// @brief 指定 VESC の COMM_REBOOT を short buffer で送るフレームを生成
-/// @param host_id PC の CAN ID
 /// @return 拡張フレーム（DLC=3），応答は要求しない
-/// @throws std::invalid_argument ID が 255 または送受信 ID が同一
-can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id, std::uint8_t host_id);
+/// @throws std::invalid_argument ID が予約済みの 254 または broadcast の 255
+can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id);
 
 /// @brief 故障コードのみを含む selective 応答を検査して読み取る
-/// @note CAN ID の下位 byte は宛先，送信元 VESC ID は data[0]
+/// @note 宛先は kReplyCanId，送信元 VESC ID は data[0]
 /// @return 正しい形式なら true，不正フレームでは出力を変更しない
-bool decode_fault_reply(const can_msgs::msg::Frame &frame, std::uint8_t host_id, FaultCode &fault);
+bool decode_fault_reply(const can_msgs::msg::Frame &frame, FaultCode &fault);
 
 struct Status1
 {
@@ -91,33 +92,35 @@ struct Status6
   double ppm{};  // normalized PPM input, dimensionless
 };
 
+// 指令関数名は公式 firmware 6.06 の comm_can.c に対応
+// このライブラリでは CAN フレームを返し，送信は CanTransport が担当する
+
 /// @brief duty 比の指令フレームを生成
 /// @param controller_id 宛先 ID（0〜254）
 /// @param duty VESC 方向の比率 [-1, 1]，0.5 は 50%
 /// @return 拡張 CAN フレーム（DLC=4），比率を 100000 倍して格納
 /// @throws std::out_of_range 非有限値または比率の範囲外
-can_msgs::msg::Frame make_set_duty_frame(std::uint8_t controller_id, double duty);
+can_msgs::msg::Frame comm_can_set_duty(std::uint8_t controller_id, double duty);
 
 /// @brief ERPM の速度指令フレームを生成
 /// @param controller_id 宛先 ID（0〜254）
 /// @param electrical_rpm 電気回転数 [ERPM]
 /// @return 拡張 CAN フレーム（DLC=4）
-can_msgs::msg::Frame make_set_rpm_frame(std::uint8_t controller_id, std::int32_t electrical_rpm);
+can_msgs::msg::Frame comm_can_set_rpm(std::uint8_t controller_id, std::int32_t electrical_rpm);
 
 /// @brief モータ電流の指令フレームを生成
 /// @param controller_id 宛先 ID（0〜254）
 /// @param motor_current_a VESC 方向のモータ電流 [A]
 /// @return 拡張 CAN フレーム（DLC=4）
 /// @throws std::out_of_range 非有限値または倍率変換後の int32 範囲外
-can_msgs::msg::Frame make_set_current_frame(std::uint8_t controller_id, double motor_current_a);
+can_msgs::msg::Frame comm_can_set_current(std::uint8_t controller_id, double motor_current_a);
 
 /// @brief モータ PID 角度の指令フレームを生成
 /// @param controller_id 宛先 ID（0〜254）
 /// @param motor_pid_position_deg モータ PID 角度 [deg]
 /// @return 拡張 CAN フレーム（DLC=4）
 /// @throws std::out_of_range 非有限値または倍率変換後の int32 範囲外
-can_msgs::msg::Frame make_set_position_frame(
-  std::uint8_t controller_id, double motor_pid_position_deg);
+can_msgs::msg::Frame comm_can_set_pos(std::uint8_t controller_id, double motor_pid_position_deg);
 
 /// @brief STATUS1 の ERPM・モータ電流・duty を読み取る
 /// @param frame 受信 CAN フレーム

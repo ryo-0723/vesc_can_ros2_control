@@ -62,87 +62,85 @@ template <typename Status, auto Decode> bool decode_status_frame(const can_msgs:
 }
 TEST(Protocol, CommandsHaveNativeIdAndBigEndianSignedPayload)
 {
-  auto frame = protocol::make_set_rpm_frame(11, -123456);
+  auto frame = protocol::comm_can_set_rpm(11, -123456);
   EXPECT_EQ(frame.id, 0x30Bu);
   EXPECT_TRUE(frame.is_extended);
   EXPECT_FALSE(frame.is_rtr);
   EXPECT_FALSE(frame.is_error);
   EXPECT_EQ(frame.dlc, 4);
   EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{255, 254, 29, 192, 0, 0, 0, 0}));
-  frame = protocol::make_set_current_frame(21, 1.5);
+  frame = protocol::comm_can_set_current(21, 1.5);
   EXPECT_EQ(frame.id, 0x115u);
   EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{0, 0, 5, 220, 0, 0, 0, 0}));
-  frame = protocol::make_set_position_frame(21, 90.0);
+  frame = protocol::comm_can_set_pos(21, 90.0);
   EXPECT_EQ(frame.id, 0x415u);
   EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{5, 93, 74, 128, 0, 0, 0, 0}));
-  EXPECT_THROW(protocol::make_set_current_frame(255, 0.0), std::invalid_argument);
-  EXPECT_THROW(protocol::make_set_current_frame(11, kUnknownValue), std::out_of_range);
-  EXPECT_THROW(protocol::make_set_position_frame(11, 1e20), std::out_of_range);
+  EXPECT_THROW(protocol::comm_can_set_current(255, 0.0), std::invalid_argument);
+  EXPECT_THROW(protocol::comm_can_set_current(11, kUnknownValue), std::out_of_range);
+  EXPECT_THROW(protocol::comm_can_set_pos(11, 1e20), std::out_of_range);
 }
 
 TEST(Protocol, DutyCommandsUseVesc6SignedRatioAndRejectInvalidInputs)
 {
-  auto frame = protocol::make_set_duty_frame(41, 0.5);
+  auto frame = protocol::comm_can_set_duty(41, 0.5);
   EXPECT_EQ(frame.id, 0x29u);
   EXPECT_TRUE(frame.is_extended);
   EXPECT_FALSE(frame.is_rtr);
   EXPECT_FALSE(frame.is_error);
   EXPECT_EQ(frame.dlc, 4);
   EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{0, 0, 0xC3, 0x50, 0, 0, 0, 0}));
-  frame = protocol::make_set_duty_frame(41, -0.25);
+  frame = protocol::comm_can_set_duty(41, -0.25);
   EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{0xFF, 0xFF, 0x9E, 0x58, 0, 0, 0, 0}));
-  EXPECT_EQ(protocol::make_set_duty_frame(0, 1.0).data,
+  EXPECT_EQ(protocol::comm_can_set_duty(0, 1.0).data,
     (std::array<std::uint8_t, 8>{0, 1, 0x86, 0xA0, 0, 0, 0, 0}));
-  EXPECT_EQ(protocol::make_set_duty_frame(254, -1.0).data,
+  EXPECT_EQ(protocol::comm_can_set_duty(254, -1.0).data,
     (std::array<std::uint8_t, 8>{0xFF, 0xFE, 0x79, 0x60, 0, 0, 0, 0}));
-  EXPECT_EQ(protocol::make_set_duty_frame(41, 0.0).data, (std::array<std::uint8_t, 8>{}));
+  EXPECT_EQ(protocol::comm_can_set_duty(41, 0.0).data, (std::array<std::uint8_t, 8>{}));
   for (double value : {1.01, -1.01, kUnknownValue, std::numeric_limits<double>::infinity(),
          -std::numeric_limits<double>::infinity()}) {
-    EXPECT_THROW(protocol::make_set_duty_frame(41, value), std::out_of_range);
+    EXPECT_THROW(protocol::comm_can_set_duty(41, value), std::out_of_range);
   }
-  EXPECT_THROW(protocol::make_set_duty_frame(255, 0.5), std::invalid_argument);
+  EXPECT_THROW(protocol::comm_can_set_duty(255, 0.5), std::invalid_argument);
 }
 
 TEST(Protocol, FaultQueryMatchesVesc6SelectiveShortBufferWireFormat)
 {
-  const auto request = protocol::make_fault_request(11, 254);
+  const auto request = protocol::make_fault_request(11);
   EXPECT_EQ(request.id, 0x80Bu);
   EXPECT_EQ(request.dlc, 7);
   EXPECT_TRUE(request.is_extended);
   EXPECT_FALSE(request.is_rtr);
   EXPECT_FALSE(request.is_error);
   EXPECT_EQ(request.data, (std::array<std::uint8_t, 8>{254, 0, 50, 0, 0, 128, 0, 0}));
-  EXPECT_THROW(protocol::make_fault_request(255, 254), std::invalid_argument);
-  EXPECT_THROW(protocol::make_fault_request(11, 255), std::invalid_argument);
-  EXPECT_THROW(protocol::make_fault_request(11, 11), std::invalid_argument);
+  EXPECT_THROW(protocol::make_fault_request(255), std::invalid_argument);
+  EXPECT_THROW(protocol::make_fault_request(254), std::invalid_argument);
   can_msgs::msg::Frame reply;
   reply.id = 0x8FE;  // Destination is the host; data[0] identifies the motor.
   reply.is_extended = true;
   reply.dlc = 8;
   reply.data = {11, 1, 50, 0, 0, 128, 0, 4};
   protocol::FaultCode fault;
-  ASSERT_TRUE(protocol::decode_fault_reply(reply, 254, fault));
+  ASSERT_TRUE(protocol::decode_fault_reply(reply, fault));
   EXPECT_EQ(fault.controller_id, 11);
   EXPECT_EQ(fault.code, 4);
   for (std::uint8_t code : {0, 255}) {
     reply.data[7] = code;
-    ASSERT_TRUE(protocol::decode_fault_reply(reply, 254, fault));
+    ASSERT_TRUE(protocol::decode_fault_reply(reply, fault));
     EXPECT_EQ(fault.code, code);  // Preserve newer firmware codes without narrowing the list.
   }
 }
 
 TEST(Protocol, RebootWrapsComm29InCanShortBufferWithoutBroadcast)
 {
-  const auto frame = protocol::make_reboot_frame(51, 254);
+  const auto frame = protocol::make_reboot_frame(51);
   EXPECT_EQ(frame.id, 0x833u);
   EXPECT_TRUE(frame.is_extended);
   EXPECT_FALSE(frame.is_rtr);
   EXPECT_FALSE(frame.is_error);
   EXPECT_EQ(frame.dlc, 3);
   EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{254, 2, 29, 0, 0, 0, 0, 0}));
-  EXPECT_THROW(protocol::make_reboot_frame(255, 254), std::invalid_argument);
-  EXPECT_THROW(protocol::make_reboot_frame(51, 255), std::invalid_argument);
-  EXPECT_THROW(protocol::make_reboot_frame(51, 51), std::invalid_argument);
+  EXPECT_THROW(protocol::make_reboot_frame(255), std::invalid_argument);
+  EXPECT_THROW(protocol::make_reboot_frame(254), std::invalid_argument);
 }
 
 TEST(Core, RebootResetInvalidatesSelectedFeedbackAndDropsEveryOldCommand)
@@ -181,14 +179,17 @@ TEST(Protocol, FaultReplyRejectsWrongAddressMaskCommandAndFrameFormat)
   valid.is_extended = true;
   valid.dlc = 8;
   valid.data = {11, 1, 50, 0, 0, 128, 0, 4};
-  const auto reject = [](const can_msgs::msg::Frame &frame, std::uint8_t host_id = 254) {
+  const auto reject = [](const can_msgs::msg::Frame &frame) {
     protocol::FaultCode fault{77, 88};
-    EXPECT_FALSE(protocol::decode_fault_reply(frame, host_id, fault));
+    EXPECT_FALSE(protocol::decode_fault_reply(frame, fault));
     EXPECT_EQ(fault.controller_id, 77);
     EXPECT_EQ(fault.code, 88);
   };
-  reject(valid, 253);
-  reject(valid, 255);
+  for (auto id : {0x8FDu, 0x8FFu}) {
+    auto frame = valid;
+    frame.id = id;
+    reject(frame);
+  }
   for (int byte : {0, 1, 2, 3, 4, 5, 6}) {
     auto frame = valid;
     frame.data[byte] ^= 0x01;
@@ -642,7 +643,7 @@ TEST(Core, ZeroVelocityReleasesCurrentWhileZeroPositionCommandsJointZero)
   driver.command_frames(start + 10ms, frames);
   ASSERT_EQ(frames.size(), 2u);
   EXPECT_EQ(frames[0].id >> 8, 3u);
-  EXPECT_EQ(frames[1].data, protocol::make_set_position_frame(21, 90.0).data);
+  EXPECT_EQ(frames[1].data, protocol::comm_can_set_pos(21, 90.0).data);
   ASSERT_TRUE(driver.set_command(0, 0.0, start + 11ms));
   driver.command_frames(start + 11ms, frames);
   EXPECT_EQ(frames[0].id, 0x10Bu);
@@ -673,9 +674,9 @@ TEST(Core, VelocityRampUsesJointUnitsAndMotorDirection)
   std::vector<can_msgs::msg::Frame> frames;
   driver.command_frames(start + 500ms, frames);
   ASSERT_EQ(frames.size(), 1u);
-  EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, -210).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_rpm(11, -210).data);
   driver.command_frames(start + 1000ms, frames);
-  EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, -420).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_rpm(11, -420).data);
 }
 
 TEST(Core, CurrentStartupTransitionsOnlyOnFeedbackInCommandDirection)
@@ -695,7 +696,7 @@ TEST(Core, CurrentStartupTransitionsOnlyOnFeedbackInCommandDirection)
   driver.command_frames(start + 10ms, frames);
   ASSERT_EQ(frames.size(), 1u);
   EXPECT_EQ(frames[0].id, 0x10Bu);
-  EXPECT_EQ(frames[0].data, protocol::make_set_current_frame(11, -2.0).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_current(11, -2.0).data);
   auto feedback = make_status_1_frame();
   feedback.data = {255, 255, 254, 92, 0, 0, 0, 0};  // -420 ERPM = +60 motor RPM.
   driver.receive(feedback, start + 20ms);
@@ -785,7 +786,7 @@ TEST(Core, CurrentCommandsUseAmpsDirectionAndSharedStops)
     driver.command_frames(start + 10ms, frames);
     ASSERT_EQ(frames.size(), 2u);
     EXPECT_EQ(frames[0].id, 0x10Cu);
-    EXPECT_EQ(frames[0].data, protocol::make_set_current_frame(12, -command).data);
+    EXPECT_EQ(frames[0].data, protocol::comm_can_set_current(12, -command).data);
   }
   EXPECT_TRUE(command_is_valid(current, 3.0));
   EXPECT_TRUE(command_is_valid(current, -3.0));
@@ -916,7 +917,7 @@ TEST(Core, HybridRestartsOnReversalAndZeroButNotOnSpeedDrop)
   EXPECT_EQ(frames[0].id >> 8, 3u);
   ASSERT_TRUE(driver.set_command(0, -10.0, start + 21ms));
   driver.command_frames(start + 22ms, frames);
-  EXPECT_EQ(frames[0].data, protocol::make_set_current_frame(11, -2.0).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_current(11, -2.0).data);
   auto reversed = make_status_1_frame();
   reversed.data = {255, 255, 254, 92, 0, 0, 0, 0};
   driver.receive(reversed, start + 30ms);
@@ -929,7 +930,7 @@ TEST(Core, HybridRestartsOnReversalAndZeroButNotOnSpeedDrop)
   driver.receive(stopped, start + 33ms);
   ASSERT_TRUE(driver.set_command(0, -10.0, start + 33ms));
   driver.command_frames(start + 34ms, frames);
-  EXPECT_EQ(frames[0].data, protocol::make_set_current_frame(11, -2.0).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_current(11, -2.0).data);
 }
 
 TEST(Core, HybridTransitionNeverCommandsAboveConfiguredSpeedLimit)
@@ -950,7 +951,7 @@ TEST(Core, HybridTransitionNeverCommandsAboveConfiguredSpeedLimit)
   std::vector<can_msgs::msg::Frame> frames;
   driver.command_frames(start + 10ms, frames);
   EXPECT_EQ(frames[0].id >> 8, 3u);
-  EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, 668).data);  // 9.99 rad/s.
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_rpm(11, 668).data);  // 9.99 rad/s.
 }
 
 TEST(Core, DirectVelocityReversalPreservesSlewRate)
@@ -966,14 +967,14 @@ TEST(Core, DirectVelocityReversalPreservesSlewRate)
   ASSERT_TRUE(driver.set_command(0, 1.0, start));
   std::vector<can_msgs::msg::Frame> frames;
   driver.command_frames(start + 100ms, frames);
-  EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, 67).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_rpm(11, 67).data);
   ASSERT_TRUE(driver.set_command(0, -1.0, start + 100ms));
   driver.command_frames(start + 150ms, frames);
-  EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, 33).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_rpm(11, 33).data);
   driver.command_frames(start + 200ms, frames);
-  EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, 0).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_rpm(11, 0).data);
   driver.command_frames(start + 250ms, frames);
-  EXPECT_EQ(frames[0].data, protocol::make_set_rpm_frame(11, -33).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_rpm(11, -33).data);
 }
 
 TEST(Core, EpochFeedbackAndCommandsHaveValidReceiveTimes)
@@ -999,7 +1000,7 @@ TEST(Core, EpochFeedbackAndCommandsHaveValidReceiveTimes)
   std::vector<can_msgs::msg::Frame> frames;
   driver.command_frames(epoch + 100ms, frames);  // Timeout boundary is inclusive.
   ASSERT_EQ(frames.size(), 1u);
-  EXPECT_EQ(frames[0].data, protocol::make_set_current_frame(11, 2.0).data);
+  EXPECT_EQ(frames[0].data, protocol::comm_can_set_current(11, 2.0).data);
   driver.command_frames(epoch + 101ms, frames);
   EXPECT_TRUE(driver.faulted());
   EXPECT_FALSE(driver.active());
@@ -1025,7 +1026,7 @@ TEST(Core, StartupFailureReplacesEarlierMotorsCommandsWithStops)
   driver.command_frames(start + 10ms, frames);
   ASSERT_EQ(frames.size(), 2u);
   EXPECT_EQ(frames[0].id >> 8, 3u);
-  EXPECT_EQ(frames[1].data, protocol::make_set_current_frame(31, 2.0).data);
+  EXPECT_EQ(frames[1].data, protocol::comm_can_set_current(31, 2.0).data);
   driver.command_frames(start + 51ms, frames);
   EXPECT_TRUE(driver.faulted());
   EXPECT_EQ(driver.fault_reason(), hybrid.name + ": startup timeout");

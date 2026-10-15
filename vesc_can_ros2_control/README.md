@@ -28,7 +28,7 @@ ros2 launch vesc_can_ros2_control vesc_control.launch.py \
 | 設定 | 意味 |
 |---|---|
 | logical_id | 状態・エラーのmotor_id、0〜255で一意にする、必須 |
-| controller_id | VESCのCAN ID、0〜254で一意にする、必須 |
+| controller_id | VESCのCAN ID、0〜253で一意にする、必須 |
 | pole_pairs | 極対数、正整数、必須 |
 | gear_ratio / direction | モータ回転数÷関節回転数、正方向は+1か-1 |
 | control_mode | velocity / current / position / duty_cycle / current_velocity |
@@ -39,6 +39,7 @@ ros2 launch vesc_can_ros2_control vesc_control.launch.py \
 | feedback_timeout_ms / command_timeout_ms | フィードバックとhardware writeの期限 |
 
 同じモータを通常ノードで使う場合は、YAMLとURDFのlogical_idを揃えます
+ホストIDの設定は不要です。CAN ID 254は故障問い合わせの応答先に予約しています
 指令と同名のstate interfaceも登録します
 追加の状態には `position`、`velocity`、`current`、`duty_cycle`、`temperature_fet`、`temperature_motor`、`input_voltage` を指定できます
 

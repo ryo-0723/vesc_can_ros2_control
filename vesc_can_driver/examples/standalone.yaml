@@ -1,13 +1,12 @@
 # 通常ノードの基本例: 駆動は速度、操舵は位置で制御する
 # CAN ID・極対数・減速比・指令上限は使用するモータに合わせる
-/**/vesc_can_ros2_control:
+/**/vesc_can_driver:
   ros__parameters:
     can_tx_topic: /can/tx
     can_rx_topic: /can/rx
     command_topic: /vesc/commands
     state_topic: /vesc/state
     error_topic: /vesc/event
-    host_can_id: 254
     fault_poll_period_ms: 100
     update_period_ms: 10
     state_publish_period_ms: 20

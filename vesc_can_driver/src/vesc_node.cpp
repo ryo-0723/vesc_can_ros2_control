@@ -21,7 +21,7 @@ class VescNode : public rclcpp::Node
 {
 public:
   /// @brief パラメータを読み込み、通信・指令受付・状態配信を起動する
-  VescNode() : rclcpp::Node("vesc_can_ros2_control")
+  VescNode() : rclcpp::Node("vesc_can_driver")
   {
     motor_idx_.fill(-1);
     TransportOptions opts;
@@ -29,11 +29,6 @@ public:
     opts.rx_topic = declare_parameter<std::string>("can_rx_topic", "/socketcan_bridge/rx");
     opts.send_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("update_period_ms", 10));
-    const auto host_id = declare_parameter<std::int64_t>("host_can_id", 254);
-    if (host_id < 0 || host_id > 254) {
-      throw std::invalid_argument("Host CAN ID must be in [0, 254]");
-    }
-    opts.host_id = static_cast<std::uint8_t>(host_id);
     opts.fault_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("fault_poll_period_ms", 100));
     const auto state_period =

@@ -152,19 +152,21 @@ QoS は Reliable / TransientLocal で、登録モータ数分の直近イベン�
 
 故障番号は [COMM_GET_VALUES_SELECTIVE](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/commands.c#L358-L453) のbit 15を指定して取得します
 要求と応答はCAN_PACKET_PROCESS_SHORT_BUFFER（8）の拡張フレームです
-応答先はPCの host_can_id（既定254）で、VESCや他の問い合わせ元と重複させません
+応答先は内部定数 kReplyCanId=254 に固定し、YAML・URDFでのホストID設定は不要です
+通常ノードとhardware pluginではモータにCAN ID 0〜253を使い、254は応答先に予約します
+通常の電流・速度・位置・duty指令は、宛先のcontroller_idだけで送信できます
 
 | 処理 | CAN ID | DLC | 内容 |
 |---|---|---|---|
 | 故障問い合わせ | (8 << 8)とVESCのcontroller_idをOR | 7 | COMM_GET_VALUES_SELECTIVE=50、mask=0x00008000 |
-| 故障応答 | (8 << 8)とPCのhost_can_idをOR | 8 | data[0]にVESCのID、data[7]に故障番号 |
-| 再起動 | (8 << 8)とVESCのcontroller_idをOR | 3 | host_can_id、2、COMM_REBOOT=29 |
+| 故障応答 | (8 << 8)と254をOR | 8 | data[0]にVESCのID、data[7]に故障番号 |
+| 再起動 | (8 << 8)とVESCのcontroller_idをOR | 3 | 254、2、COMM_REBOOT=29 |
 
-host_can_id=254の応答IDは0x8FEです
+故障応答のCAN IDは0x8FEです
 IDの組み立ては [公式のcomm_can_send_buffer](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L389-L419) に対応しています
 STATUSだけを通すブリッジには、故障応答の受信フィルタも追加します
 再起動のコマンド番号は [公式のCOMM_REBOOT](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/datatypes.h#L921-L925) です
-既定のhost_can_idなら再起動ペイロードは FE 02 1D になります
+再起動ペイロードは FE 02 1D です
 
 fault_poll_period_ms（既定100）はfeedback_timeout_msより短く設定します
 0にすると問い合わせを無効化します
@@ -236,6 +238,7 @@ hardware のモータ別トピックは vesc_can_msgs/msg/VescState を使用し
 | msg.state.fault_code | msg.fault_code、int16 に変更 |
 
 vesc_can_msgs と購読側を同じ定義で再ビルドし、/vesc/event の購読型を VescEvent に変更します
+通常ノード名はvesc_can_driverで、再起動サービスは /vesc_can_driver/reboot です
 ros2_control の URDF には全 joint に一意の logical_id を追加します
 通常ノードと同じモータなら YAML と URDF の logical_id を揃えます
 通常ノードの指令、再起動サービス、CAN の形式、ros2_control の state / command interface は維持します

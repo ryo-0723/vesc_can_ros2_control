@@ -18,17 +18,16 @@ constexpr double kPositionCommandScale = 1000000.0;
 
 /// @brief COMM コマンドを 1 枚の拡張 CAN short buffer に格納する
 can_msgs::msg::Frame make_short_command(
-  std::uint8_t controller_id, std::uint8_t host_id, std::uint8_t command, bool reply)
+  std::uint8_t controller_id, std::uint8_t command, bool reply)
 {
-  if (controller_id == kBroadcastControllerId || host_id == kBroadcastControllerId ||
-      controller_id == host_id) {
-    throw std::invalid_argument("Short command requires distinct unicast motor and host IDs");
+  if (controller_id >= kReplyCanId) {
+    throw std::invalid_argument("Short command requires a motor CAN ID in [0, 253]");
   }
   can_msgs::msg::Frame frame;
   frame.id = (kProcessShortBufferId << kPacketIdShift) | controller_id;
   frame.is_extended = true;
   frame.dlc = 3;
-  frame.data[0] = host_id;
+  frame.data[0] = kReplyCanId;
   frame.data[1] = reply ? 0 : 2;
   frame.data[2] = command;
   return frame;
@@ -91,32 +90,32 @@ std::int32_t read_signed_16(const can_msgs::msg::Frame &frame, std::size_t offse
 }
 }  // namespace
 
-can_msgs::msg::Frame make_fault_request(std::uint8_t controller_id, std::uint8_t host_id)
+can_msgs::msg::Frame make_fault_request(std::uint8_t controller_id)
 {
-  auto frame = make_short_command(controller_id, host_id, kGetValuesSelectiveId, true);
+  auto frame = make_short_command(controller_id, kGetValuesSelectiveId, true);
   frame.dlc = 7;
   frame.data[5] = 0x80;  // Big-endian mask: bit 15 selects fault_code.
   return frame;
 }
 
-can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id, std::uint8_t host_id)
+can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id)
 {
-  return make_short_command(controller_id, host_id, kCommRebootId, false);
+  return make_short_command(controller_id, kCommRebootId, false);
 }
 
-bool decode_fault_reply(const can_msgs::msg::Frame &frame, std::uint8_t host_id, FaultCode &fault)
+bool decode_fault_reply(const can_msgs::msg::Frame &frame, FaultCode &fault)
 {
-  if (!is_valid_frame(frame, kProcessShortBufferId) || host_id == kBroadcastControllerId ||
-      (frame.id & kControllerIdMask) != host_id || frame.data[0] == kBroadcastControllerId ||
-      frame.data[0] == host_id || frame.data[1] != 1 || frame.data[2] != kGetValuesSelectiveId ||
-      frame.data[3] != 0 || frame.data[4] != 0 || frame.data[5] != 0x80 || frame.data[6] != 0) {
+  if (!is_valid_frame(frame, kProcessShortBufferId) ||
+      (frame.id & kControllerIdMask) != kReplyCanId || frame.data[0] >= kReplyCanId ||
+      frame.data[1] != 1 || frame.data[2] != kGetValuesSelectiveId || frame.data[3] != 0 ||
+      frame.data[4] != 0 || frame.data[5] != 0x80 || frame.data[6] != 0) {
     return false;
   }
   fault = {frame.data[0], frame.data[7]};
   return true;
 }
 
-can_msgs::msg::Frame make_set_duty_frame(std::uint8_t controller_id, double duty)
+can_msgs::msg::Frame comm_can_set_duty(std::uint8_t controller_id, double duty)
 {
   if (!std::isfinite(duty) || std::abs(duty) > 1.0) {
     throw std::out_of_range("Duty command must be finite and in [-1, 1]");
@@ -125,19 +124,18 @@ can_msgs::msg::Frame make_set_duty_frame(std::uint8_t controller_id, double duty
     controller_id, kSetDutyId, scale_command_value(duty, kDutyCommandScale));
 }
 
-can_msgs::msg::Frame make_set_rpm_frame(std::uint8_t controller_id, std::int32_t electrical_rpm)
+can_msgs::msg::Frame comm_can_set_rpm(std::uint8_t controller_id, std::int32_t electrical_rpm)
 {
   return make_command_frame(controller_id, kSetRpmId, electrical_rpm);
 }
 
-can_msgs::msg::Frame make_set_current_frame(std::uint8_t controller_id, double motor_current_a)
+can_msgs::msg::Frame comm_can_set_current(std::uint8_t controller_id, double motor_current_a)
 {
   return make_command_frame(
     controller_id, kSetCurrentId, scale_command_value(motor_current_a, kCurrentCommandScale));
 }
 
-can_msgs::msg::Frame make_set_position_frame(
-  std::uint8_t controller_id, double motor_pid_position_deg)
+can_msgs::msg::Frame comm_can_set_pos(std::uint8_t controller_id, double motor_pid_position_deg)
 {
   return make_command_frame(controller_id, kSetPositionId,
     scale_command_value(motor_pid_position_deg, kPositionCommandScale));

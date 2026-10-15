@@ -253,7 +253,6 @@ struct TransportOptions
   std::string tx_topic{"/can/tx"};
   std::string rx_topic{"/can/rx"};
   std::chrono::milliseconds send_period{10};
-  std::uint8_t host_id{254};
   std::chrono::milliseconds fault_period{100};  // 0 disables fault queries
   bool auto_activate{false};  // standalone starts on fresh input; hardware uses lifecycle
 };
@@ -271,7 +270,7 @@ class CanTransport
 public:
   /// @brief CAN トピックと周期タイマーを作成する，executor は start() で起動
   /// @param configs モータ設定（登録順）
-  /// @param opts トピック名・送信周期・故障問い合わせの応答先 ID と周期
+  /// @param opts トピック名・送信周期・故障問い合わせの周期
   /// @param can_node 通信専用 executor に登録するノード
   /// @param on_fault 異常を検出した処理から呼ぶ通知関数，状態ロック外で実行
   CanTransport(std::vector<MotorConfig> configs, TransportOptions opts,

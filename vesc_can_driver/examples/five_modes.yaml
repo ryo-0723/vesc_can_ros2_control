@@ -1,13 +1,12 @@
 # 通常ノードの5モード例: 速度・位置・電流・速度＋電流・duty比
 # 模擬CAN用のトピックを使用する
-/**/vesc_can_ros2_control:
+/**/vesc_can_driver:
   ros__parameters:
     can_tx_topic: /bench/can/tx
     can_rx_topic: /bench/can/rx
     command_topic: /vesc/commands
     state_topic: /vesc/state
     error_topic: /vesc/event
-    host_can_id: 254
     fault_poll_period_ms: 100
     update_period_ms: 10
     state_publish_period_ms: 20

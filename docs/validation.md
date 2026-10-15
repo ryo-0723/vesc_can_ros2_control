@@ -669,3 +669,28 @@ ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=185で70ケースの成功を�
 - YAML・URDF、文書のローカルリンク・見出し、C++・Pythonの書式を確認
 
 検証は模擬CANで、実機への動作指令は送信していません
+
+## 公式の関数名と応答先設定の整理
+
+2026-10-15、CAN指令の生成関数をVESC firmware 6.06と同じ名前に揃えました
+comm_can_set_duty / comm_can_set_current / comm_can_set_rpm / comm_can_set_posを使います
+このライブラリの戻り値はcan_msgs::msg::Frameで、送信はCanTransportが行います
+STATUSのデコードなど、公式に同じ役割の独立した関数がない処理はドライバ内の名前を使います
+
+ホストIDの設定をYAML・URDF・TransportOptionsから削除し、故障問い合わせ・応答デコード・rebootの引数も減らしました
+故障取得を維持するため、short bufferに必要な応答先254だけをkReplyCanIdとして内部で固定しています
+通常ノードとhardware pluginではCAN ID 254をモータに割り当てず、故障応答は0x8FEで受信します
+通常ノード名はvesc_can_driverとし、YAMLの対象ノード名と各サービスの参照先も合わせました
+
+ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=186で70ケースが成功しました
+集計は75 tests、0 errors、0 failures、0 skippedです（ケース70件と実行単位5件）
+
+- 4種類の指令のCAN ID・DLC・符号・倍率と、5モードの送信動作を確認
+- ホストIDを引数に取らない故障問い合わせ・応答デコード・再起動の既知ペイロードを確認
+- 予約済みの254、broadcastの255、不正な応答先・送信元・ペイロードの拒否を確認
+- 通常ノードとhardware pluginで故障通知、停止の保持、選択した論理IDのrebootを確認
+- インストール済みのprotocol targetを外部C++コードから使い、新しい関数名でビルド・実行を確認
+- ホストID設定のない標準の設定例で、通常ノードとros2_controlを模擬起動し、指令とフィードバックを確認
+- YAML・URDF・文書の参照と、C++・Pythonの書式を確認
+
+検証は模擬CANで、実VESC・実CANバスの検証は行っていません

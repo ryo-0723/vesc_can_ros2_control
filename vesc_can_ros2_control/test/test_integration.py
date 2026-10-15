@@ -446,7 +446,7 @@ class IntegrationTest(unittest.TestCase):
         )
 
     def test_02_standalone_vesc_messages_and_logical_ids(self):
-        prefix = "/topic_test/vesc_can_ros2_control"
+        prefix = "/topic_test/vesc_can_driver"
         self.node.create_subscription(Frame, "/topic_test/can/tx", self.observe_frame, 100)
 
         self.node.create_subscription(
@@ -480,7 +480,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(self.node.count_publishers(prefix + "/motors/drive_joint/state"), 0)
         self.assertFalse(
             any(
-                info.node_name == "vesc_can_ros2_control"
+                info.node_name == "vesc_can_driver"
                 for info in self.node.get_publishers_info_by_topic("/diagnostics")
             )
         )
@@ -537,7 +537,7 @@ class IntegrationTest(unittest.TestCase):
         )
 
     def test_03_standalone_five_modes_and_invalid_current(self):
-        prefix = "/five_topic/vesc_can_ros2_control"
+        prefix = "/five_topic/vesc_can_driver"
         self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(
             VescCommandArray, prefix.rsplit("/", 1)[0] + "/commands", 10
@@ -603,7 +603,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: self.frames == stopped))
 
     def test_04_standalone_invalid_ids_and_values(self):
-        prefix = "/five_topic/vesc_can_ros2_control"
+        prefix = "/five_topic/vesc_can_driver"
         self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(
             VescCommandArray, prefix.rsplit("/", 1)[0] + "/commands", 10
@@ -643,7 +643,7 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(self.frames, stopped)
 
     def test_05_standalone_partial_commands_keep_other_motor_timeouts(self):
-        prefix = "/five_topic/vesc_can_ros2_control"
+        prefix = "/five_topic/vesc_can_driver"
         self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(
             VescCommandArray, prefix.rsplit("/", 1)[0] + "/commands", 10
@@ -696,7 +696,7 @@ class IntegrationTest(unittest.TestCase):
         )
         cmd_pub = self.node.create_publisher(VescCommandArray, "/event_test/commands", 10)
         error_pub = self.node.create_publisher(Frame, "/event_test/can/rx", 10)
-        reboot_srv = "/event_test/vesc_can_ros2_control/reboot"
+        reboot_srv = "/event_test/vesc_can_driver/reboot"
         self.assertTrue(
             self.wait_for(
                 lambda: cmd_pub.get_subscription_count() > 0
@@ -770,7 +770,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn((52, 1, 7500), self.frame_history)
         response = self.request(
             SetParameters,
-            "/id_test/vesc_can_ros2_control/set_parameters",
+            "/id_test/vesc_can_driver/set_parameters",
             SetParameters.Request(
                 parameters=[
                     Parameter(
@@ -785,7 +785,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertFalse(response.results[0].successful)
         response = self.request(
             GetParameters,
-            "/id_test/vesc_can_ros2_control/get_parameters",
+            "/id_test/vesc_can_driver/get_parameters",
             GetParameters.Request(names=["motor_a.control_mode"]),
         )
         self.assertEqual(response.values[0].string_value, "current_velocity")
@@ -794,7 +794,7 @@ class IntegrationTest(unittest.TestCase):
         self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(VescCommandArray, "/five_topic/commands", 10)
         self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
-        reboot_srv = "/five_topic/vesc_can_ros2_control/reboot"
+        reboot_srv = "/five_topic/vesc_can_driver/reboot"
         for stamp in (Time(sec=-1, nanosec=42), Time(sec=2147483647, nanosec=42)):
             with self.subTest(stamp=stamp):
                 self.assertTrue(self.reboot(reboot_srv).success)
@@ -827,7 +827,7 @@ class IntegrationTest(unittest.TestCase):
         cmd_pub = self.node.create_publisher(VescCommandArray, "/event_test/commands", 10)
         cmd = self.make_commands(ids=[1, 2], values=[1.0, 0.1])
         send = lambda: cmd_pub.publish(cmd)
-        reboot_srv = "/event_test/vesc_can_ros2_control/reboot"
+        reboot_srv = "/event_test/vesc_can_driver/reboot"
         healthy = self.wait_for(
             lambda: set(self.vesc_states) == {1, 2}
             and all(state.fault_code == 0 for state in self.vesc_states.values()),
@@ -891,7 +891,7 @@ class IntegrationTest(unittest.TestCase):
     def test_10_reboot_uses_logical_id_and_never_replays_old_commands(self):
         self.node.create_subscription(Frame, "/id_test/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(VescCommandArray, "/id_test/commands", 10)
-        service = "/id_test/vesc_can_ros2_control/reboot"
+        service = "/id_test/vesc_can_driver/reboot"
         self.assertTrue(self.reboot(service, motor_id=10).success)
         self.reboot_frames.clear()
         cmd = self.make_commands(ids=[10, 11, 12], values=[1.0, 1.0, 1.0])
@@ -922,7 +922,7 @@ class IntegrationTest(unittest.TestCase):
         )
 
     def test_11_duty_ratio_direction_and_startup_mode_remain_fixed(self):
-        prefix = "/five_topic/vesc_can_ros2_control"
+        prefix = "/five_topic/vesc_can_driver"
         self.node.create_subscription(Frame, "/five_topic/can/tx", self.observe_frame, 100)
         self.node.create_subscription(
             VescStateArray, "/five_topic/state", self.observe_state_array, 10

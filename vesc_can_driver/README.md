@@ -17,7 +17,7 @@ ros2_controlを使う場合も、CAN通信と単位変換はこのパッケー�
 | 設定 | 意味 |
 |---|---|
 | logical_id | 上位ノードが使うmotor_id、0〜255で一意にする |
-| controller_id | VESC Toolで設定したCAN ID、0〜254で一意にする |
+| controller_id | VESC Toolで設定したCAN ID、0〜253で一意にする |
 | control_mode | velocity / current / position / duty_cycle / current_velocity |
 | pole_pairs | 極対数、14極なら7 |
 | gear_ratio / direction | モータ回転数÷関節回転数、正方向は+1か-1 |
@@ -59,7 +59,7 @@ PC側の全台停止は、影響する各motor_idへ同じ停止理由を通知�
 
 ```bash
 ros2 topic echo /vesc/event vesc_can_msgs/msg/VescEvent --qos-durability transient_local
-ros2 service call /vesc_can_ros2_control/reboot vesc_can_msgs/srv/Reboot '{motor_id: 1}'
+ros2 service call /vesc_can_driver/reboot vesc_can_msgs/srv/Reboot '{motor_id: 1}'
 ```
 
 再起動を受理すると全台の保存指令を破棄し、指定したVESCへ再起動フレームを1回送ります
@@ -75,7 +75,8 @@ ros2 service call /vesc_can_ros2_control/reboot vesc_can_msgs/srv/Reboot '{motor
 VESC Toolで必要なSTATUSの周期送信を有効にします
 速度・電流・duty比にはSTATUS1、位置制御にはSTATUS1と4、積算角にはSTATUS5が必要です
 故障問い合わせも使うため、STATUSに加えてshort bufferの応答を中継します
-`host_can_id`（既定254）は同じバスのVESCや他の問い合わせ元と重複させません
+ホストIDの設定は不要です
+故障問い合わせの応答先は内部で254に固定しているため、モータには254を割り当てません
 問い合わせの形式と受信IDは [CANの故障問い合わせ](../docs/messages.md#canの故障問い合わせと再起動) にまとめています
 
 ## C++ライブラリとして使う
@@ -87,6 +88,10 @@ VESC Toolで必要なSTATUSの周期送信を有効にします
 | vesc_can_driver::state | vesc_state.hpp | ROSの状態・エラー配信 |
 
 フレーム処理だけなら `protocol` にリンクします
+指令関数の名前は [公式comm_can.c](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L469-L511) の
+`comm_can_set_duty`、`comm_can_set_current`、`comm_can_set_rpm`、`comm_can_set_pos` に合わせています
+このライブラリの関数はCANフレームを返し、実際の送信はCanTransportが周期的に行います
+STATUSのデコードなど、このドライバ固有の関数は用途を表す名前にしています
 
 ```cmake
 find_package(vesc_can_driver REQUIRED)
@@ -96,7 +101,7 @@ target_link_libraries(my_can_node PRIVATE vesc_can_driver::protocol)
 ```cpp
 #include "vesc_can_driver/vesc_protocol.hpp"
 
-auto frame = vesc_can_driver::protocol::make_set_rpm_frame(11, 420);  // CAN ID 11、420 ERPM
+auto frame = vesc_can_driver::protocol::comm_can_set_rpm(11, 420);  // CAN ID 11、420 ERPM
 ```
 
 `protocol` はROSノードを起動しません
