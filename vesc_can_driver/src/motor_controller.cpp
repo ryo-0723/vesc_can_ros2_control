@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -85,7 +86,14 @@ double pos_to_deg(const MotorConfig &cfg, double pos_rad)
 
 double deg_to_pos(const MotorConfig &cfg, double pid_pos_deg)
 {
-  return std::remainder(pid_pos_deg * kPi / 180.0 - cfg.zero_offset_rad, 2.0 * kPi) *
+  // Pick the equivalent single-turn angle nearest the configured position range.
+  // A reversed motor at +pi must not appear at -pi when the allowed range is [0, pi].
+  const double center =
+    cfg.mode == ControlMode::Position
+      ? std::midpoint(cfg.min_pos_rad, cfg.max_pos_rad) * cfg.gear_ratio * cfg.direction
+      : 0.0;
+  return (center +
+           std::remainder(pid_pos_deg * kPi / 180.0 - cfg.zero_offset_rad - center, 2.0 * kPi)) *
          cfg.direction / cfg.gear_ratio;
 }
 

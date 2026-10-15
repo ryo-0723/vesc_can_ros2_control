@@ -255,6 +255,10 @@ void VescNode::initialize_state_publishers(std::chrono::milliseconds period)
 void VescNode::command_callback(const VescCommandArray &msg)
 {
   cmds_.clear();
+  if (msg.commands.size() > configs_.size()) {
+    transport_->stop_on_error("Too many motor commands in one array");
+    return;
+  }
   for (const auto &cmd : msg.commands) {
     const auto motor_idx = motor_idx_[cmd.logical_id];
     if (motor_idx < 0) {

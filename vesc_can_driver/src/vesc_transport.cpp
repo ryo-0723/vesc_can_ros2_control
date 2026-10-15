@@ -56,7 +56,11 @@ void VescTransport::start()
   }
   exec_thread_ = std::thread([this]() {
     try {
-      io_exec_.spin();
+      // cancel() can precede the worker's first wait; a finite wait also covers that race.
+      while (!shutdown_started_.load() &&
+             rclcpp::ok(io_node_->get_node_base_interface()->get_context())) {
+        io_exec_.spin_once(std::chrono::milliseconds(20));
+      }
     } catch (const std::exception &error) {
       stop_on_error(std::string("VESC executor failed: ") + error.what());
       RCLCPP_ERROR(io_node_->get_logger(), "VESC executor failed: %s", error.what());
@@ -107,13 +111,15 @@ bool VescTransport::activate()
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
   const auto now = SteadyClock::now();
-  if (reboot_idx_ || std::any_of(rx_after_.begin(), rx_after_.end(),
-                       [now](TimePoint after) { return now < after; })) {
+  if (pending_errors_.load() != 0 || reboot_idx_ ||
+      std::any_of(
+        rx_after_.begin(), rx_after_.end(), [now](TimePoint after) { return now < after; })) {
     return false;
   }
   std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+  // Explicit recovery clears earlier requests; requests arriving afterwards remain pending.
+  fault_requested_.exchange(false);
   const bool active = core_.activate(now);
-  fault_requested_.store(false);
   active_.store(active);
   faulted_.store(core_.is_faulted());
   stop_requested_.store(!active);
@@ -146,6 +152,7 @@ bool VescTransport::reboot(std::size_t motor_idx)
 
 void VescTransport::stop_on_error(const std::string &reason)
 {
+  pending_errors_.fetch_add(1);
   stop_requested_.store(true);
   active_.store(false);
   bool notify = false;
@@ -157,7 +164,10 @@ void VescTransport::stop_on_error(const std::string &reason)
     }
     std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
     faulted_.store(true);
+    stop_requested_.store(true);
+    active_.store(false);
   }
+  pending_errors_.fetch_sub(1);
   if (notify) {
     notify_fault({reason, std::nullopt});
   }
@@ -176,7 +186,7 @@ bool VescTransport::try_set_commands(const std::vector<double> &values)
   }
   std::unique_lock<std::mutex> state_lock(state_mutex_, std::try_to_lock);
   if (!state_lock.owns_lock() || !active_.load() || stop_requested_.load() ||
-      shutdown_started_.load()) {
+      fault_requested_.load() || pending_errors_.load() != 0 || shutdown_started_.load()) {
     return false;
   }
   const auto received_at = SteadyClock::now();
@@ -210,7 +220,8 @@ bool VescTransport::set_commands(const std::vector<MotorCommand> &cmds)
     seen.set(cmd.motor_idx);
   }
   std::lock_guard<std::mutex> state_lock(state_mutex_);
-  if (shutdown_started_.load() || core_.is_faulted() || reboot_idx_ ||
+  if (shutdown_started_.load() || fault_requested_.load() || pending_errors_.load() != 0 ||
+      core_.is_faulted() || reboot_idx_ ||
       (!opts_.auto_activate && (!active_.load() || stop_requested_.load()))) {
     return false;
   }
@@ -283,18 +294,18 @@ void VescTransport::send_commands()
       fresh_command = fresh_command || cmd.received_at.has_value();
     }
     if (opts_.auto_activate && !core_.is_active() && !core_.is_faulted() &&
-        !fault_requested_.load() && fresh_command && core_.activate(now)) {
+        !fault_requested_.load() && pending_errors_.load() == 0 && fresh_command &&
+        core_.activate(now)) {
       stop_requested_.store(false);
     }
     const bool was_faulted = core_.is_faulted();
-    if (stop_requested_.load()) {
-      if (fault_requested_.exchange(false)) {
-        if (!was_faulted) {
-          core_.stop_on_error("Stop requested by hardware/topic command validation");
-        }
-        std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+    if (fault_requested_.exchange(false)) {
+      stop_requested_.store(true);
+      if (!was_faulted) {
+        core_.stop_on_error("Stop requested by hardware/topic command validation");
       }
-    } else {
+      std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
+    } else if (!stop_requested_.load()) {
       for (std::size_t motor_idx = 0; motor_idx < pending_cmds_.size(); ++motor_idx) {
         auto &cmd = pending_cmds_[motor_idx];
         if (cmd.received_at) {
@@ -364,21 +375,20 @@ void VescTransport::receive_feedback(const VescFeedback &feedback)
   const auto now = SteadyClock::now();
   const auto motor_id = std::visit([](const auto &value) { return value.motor_id; }, feedback);
   const auto *device_fault = std::get_if<FaultCode>(&feedback);
+  const auto motor_idx = core_.motor_index(motor_id);
+  if (!motor_idx) {
+    return;
+  }
+  const auto idx = *motor_idx;
   std::optional<DriverFault> event;
   {
     std::lock_guard<std::mutex> state_lock(state_mutex_);
-    const auto &motors = core_.motors();
-    const auto motor = std::find_if(motors.begin(), motors.end(),
-      [motor_id](const auto &motor) { return motor.config().motor_id == motor_id; });
-    if (motor == motors.end()) {
-      return;
-    }
-    const auto idx = static_cast<std::size_t>(motor - motors.begin());
+    const auto &motor = core_.motors()[idx];
     if (now < rx_after_[idx]) {
       return;
     }
     if (device_fault) {
-      const auto previous_code = motor->state().fault_code;
+      const auto previous_code = motor.state().fault_code;
       core_.receive_fault(*device_fault, now);
       if (device_fault->code != 0) {
         stop_requested_.store(true);
@@ -387,7 +397,7 @@ void VescTransport::receive_feedback(const VescFeedback &feedback)
         std::fill(pending_cmds_.begin(), pending_cmds_.end(), PendingCommand{});
         if (previous_code != device_fault->code) {
           event = DriverFault{
-            motor->config().name + ": VESC fault_code=" + std::to_string(device_fault->code),
+            motor.config().name + ": VESC fault_code=" + std::to_string(device_fault->code),
             *device_fault};
         }
       }
@@ -417,7 +427,8 @@ void VescTransport::notify_fault(const DriverFault &fault)
 void VescTransport::send_outputs()
 {
   for (auto command : outputs_) {
-    if (stop_requested_.load()) {
+    if (stop_requested_.load() || fault_requested_.load() || pending_errors_.load() != 0 ||
+        shutdown_started_.load()) {
       command = protocol::comm_can_set_current(
         static_cast<std::uint8_t>(command.id & protocol::kMotorIdMask), 0.0);
     }

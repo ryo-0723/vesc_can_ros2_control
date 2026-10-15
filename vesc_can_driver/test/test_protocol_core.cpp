@@ -1198,5 +1198,121 @@ TEST(MotorSafety, FreshFeedbackAndHealthyReplyCannotReplayAFaultedCommand)
   EXPECT_EQ(motor.command(now + 107ms).command.data, protocol::comm_can_set_current(11, 3.0).data);
 }
 
+TEST(MotorController, FiveModesEncodeJointUnitsAndKeepPositionZeroAsPositionControl)
+{
+  const auto now = TimePoint(1s);
+  for (const auto mode : {ControlMode::Current, ControlMode::Velocity, ControlMode::Position,
+         ControlMode::DutyCycle, ControlMode::CurrentVelocity}) {
+    auto cfg = make_motor_config(11);
+    cfg.mode = mode;
+    cfg.gear_ratio = 2.0;
+    cfg.direction = -1.0;
+    cfg.zero_offset_rad = kPi / 2.0;
+    cfg.min_pos_rad = -1.0;
+    cfg.max_pos_rad = 1.0;
+    cfg.vel_slew_rad_s2 = 1000.0;
+    cfg.startup_current_a = mode == ControlMode::CurrentVelocity ? 2.0 : 0.0;
+    MotorController motor(cfg);
+    ASSERT_TRUE(motor.receive(MotionFeedback{11, 0, 0.0, 0.0}, now));
+    ASSERT_TRUE(motor.receive(ControlFeedback{11, 30.0, 31.0, 0.0, 90.0}, now));
+    const double value = mode == ControlMode::Current     ? 1.25
+                         : mode == ControlMode::DutyCycle ? 0.25
+                                                          : kPi / 6.0;
+    ASSERT_TRUE(motor.set_command(value, now));
+    const auto result = motor.command(now + 10ms);
+    ASSERT_TRUE(result.error.empty());
+    const auto &frame = result.command;
+    EXPECT_TRUE(frame.is_extended);
+    EXPECT_FALSE(frame.is_rtr);
+    EXPECT_FALSE(frame.is_error);
+    EXPECT_EQ(frame.dlc, 4);
+    switch (mode) {
+      case ControlMode::Current:
+        EXPECT_EQ(frame.id, 0x10Bu);
+        EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{255, 255, 251, 30, 0, 0, 0, 0}));
+        break;  // -1250 mA
+      case ControlMode::Velocity:
+        EXPECT_EQ(frame.id, 0x30Bu);
+        EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{255, 255, 255, 186, 0, 0, 0, 0}));
+        break;  // -70 ERPM
+      case ControlMode::Position:
+        EXPECT_EQ(frame.id, 0x40Bu);
+        EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{1, 201, 195, 128, 0, 0, 0, 0}));
+        break;  // 30 degrees
+      case ControlMode::DutyCycle:
+        EXPECT_EQ(frame.id, 0x00Bu);
+        EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{255, 255, 158, 88, 0, 0, 0, 0}));
+        break;  // -25000 / 100000
+      case ControlMode::CurrentVelocity:
+        EXPECT_EQ(frame.id, 0x10Bu);
+        EXPECT_EQ(frame.data, (std::array<std::uint8_t, 8>{255, 255, 248, 48, 0, 0, 0, 0}));
+        ASSERT_TRUE(motor.receive(MotionFeedback{11, -700, 1.0, 0.1}, now + 20ms));
+        EXPECT_EQ(motor.command(now + 20ms).command.id, 0x30Bu);
+        EXPECT_EQ(motor.command(now + 20ms).command.data,
+          (std::array<std::uint8_t, 8>{255, 255, 255, 186, 0, 0, 0, 0}));
+        break;
+    }
+    ASSERT_TRUE(motor.set_command(0.0, now + 30ms));
+    const auto zero = motor.command(now + 40ms);
+    EXPECT_TRUE(zero.error.empty());
+    EXPECT_EQ(zero.command.id, mode == ControlMode::Position ? 0x40Bu : 0x10Bu);
+  }
+}
+
+TEST(Core, RoutesAllMotorIdsIncludingZeroWithoutChangingRegistrationOrder)
+{
+  std::vector<MotorConfig> configs;
+  for (int id = 0; id < 254; ++id) {
+    auto cfg = make_motor_config(id);
+    cfg.logical_id = 255 - id;
+    configs.push_back(cfg);
+  }
+  DriverCore core(configs);
+  const auto now = TimePoint(1s);
+  for (int id = 0; id < 254; ++id) {
+    ASSERT_EQ(core.motor_index(id), static_cast<std::size_t>(id));
+    ASSERT_TRUE(core.receive(MotionFeedback{static_cast<std::uint8_t>(id), id, 0.0, 0.0}, now));
+    EXPECT_EQ(core.motors()[id].state().electrical_rpm, id);
+  }
+  EXPECT_FALSE(core.motor_index(254));
+  EXPECT_FALSE(core.motor_index(255));
+  EXPECT_FALSE(core.receive(MotionFeedback{254, 123, 0.0, 0.0}, now));
+  ASSERT_TRUE(core.receive_fault(FaultCode{0, 4}, now));
+  EXPECT_EQ(core.motors()[0].state().fault_code, 4);
+  EXPECT_TRUE(core.is_faulted());
+}
+
+TEST(MotorController, PositionFeedbackUsesTheConfiguredSideOfTheHalfTurnBoundary)
+{
+  for (const auto direction : {-1.0, 1.0}) {
+    for (const auto side : {-1.0, 1.0}) {
+      auto cfg = make_motor_config();
+      cfg.mode = ControlMode::Position;
+      cfg.direction = direction;
+      cfg.gear_ratio = 2.0;
+      cfg.zero_offset_rad = 0.3;
+      cfg.min_pos_rad = side < 0.0 ? -kPi / 2.0 : 0.0;
+      cfg.max_pos_rad = side < 0.0 ? 0.0 : kPi / 2.0;
+      for (const double pos : {cfg.min_pos_rad, cfg.max_pos_rad}) {
+        EXPECT_NEAR(deg_to_pos(cfg, pos_to_deg(cfg, pos)), pos, 1e-12);
+      }
+    }
+  }
+  auto cfg = make_motor_config();
+  cfg.mode = ControlMode::Position;
+  cfg.direction = -1.0;
+  cfg.min_pos_rad = 0.0;
+  cfg.max_pos_rad = kPi;
+  MotorController motor(cfg);
+  const auto now = TimePoint(1s);
+  ASSERT_TRUE(motor.receive(MotionFeedback{11, 0, 0.0, 0.0}, now));
+  ASSERT_TRUE(motor.receive(ControlFeedback{11, 30.0, 31.0, 0.0, 180.0}, now));
+  EXPECT_NEAR(motor.state().pos_rad, kPi, 1e-12);
+  EXPECT_TRUE(state_ready(cfg, motor.state(), now));
+  ASSERT_TRUE(motor.receive(ControlFeedback{11, 30.0, 31.0, 0.0, 179.98}, now));
+  EXPECT_NEAR(motor.state().pos_rad, kPi + 0.02 * kPi / 180.0, 1e-12);
+  EXPECT_TRUE(state_ready(cfg, motor.state(), now));  // Keep the existing 1 mrad tolerance.
+}
+
 }  // namespace
 }  // namespace vesc_can_driver

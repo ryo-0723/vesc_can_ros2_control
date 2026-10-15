@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstddef>
 #include <vector>
 
@@ -27,6 +28,13 @@ public:
   const std::vector<MotorController> &motors() const
   {
     return motors_;
+  }
+
+  /// @brief 本体 ID から登録順の添字を取得，未登録なら nullopt
+  /// @note 対応表は構築後に変化しないため，状態ロックなしで参照できる
+  std::optional<std::size_t> motor_index(std::uint8_t motor_id) const
+  {
+    return motor_idx_[motor_id];
   }
 
   /// @brief 登録 ID のモータへデコード済み受信値を振り分ける
@@ -91,6 +99,7 @@ public:
 
 private:
   std::vector<MotorController> motors_;
+  std::array<std::optional<std::size_t>, 256> motor_idx_{};
   bool active_{false};
   bool faulted_{false};
   std::string fault_reason_;

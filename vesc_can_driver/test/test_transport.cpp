@@ -24,6 +24,47 @@ protected:
   }
 };
 
+TEST_F(TransportTest, ImmediateShutdownNeverWaitsForTheFirstTimer)
+{
+  MotorConfig cfg;
+  cfg.name = "drive";
+  cfg.motor_id = 11;
+  TransportOptions opts;
+  opts.send_period = 5s;
+  opts.fault_period = 0ms;
+  for (int i = 0; i < 32; ++i) {
+    auto node = std::make_shared<rclcpp::Node>("immediate_shutdown_" + std::to_string(i));
+    VescTransport transport({cfg}, opts, node);
+    transport.start();
+    transport.shutdown();
+    EXPECT_FALSE(transport.active());
+    EXPECT_FALSE(transport.wait_ready(1ms));
+  }
+}
+
+TEST_F(TransportTest, PendingStopRejectsFreshCommandsBeforeTheExecutorStarts)
+{
+  MotorConfig cfg;
+  cfg.name = "drive";
+  cfg.motor_id = 11;
+  TransportOptions opts;
+  opts.auto_activate = true;
+  opts.fault_period = 0ms;
+  auto node = std::make_shared<rclcpp::Node>("pending_stop_io");
+  VescTransport transport({cfg}, opts, node);
+  ASSERT_TRUE(transport.set_commands({{0, 1.0}}));
+  transport.request_stop();
+  EXPECT_FALSE(transport.active());
+  EXPECT_FALSE(transport.set_commands({{0, 2.0}}));
+  transport.start();
+  const auto deadline = SteadyClock::now() + 1s;
+  while (!transport.faulted() && SteadyClock::now() < deadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  EXPECT_TRUE(transport.faulted());
+  EXPECT_FALSE(transport.active());
+}
+
 TEST_F(TransportTest, RejectsInvalidCanConfigurationBeforeStarting)
 {
   MotorConfig cfg;

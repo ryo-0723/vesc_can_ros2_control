@@ -86,9 +86,13 @@ plugin は位置モード以外の関節に position state interface を登録�
 ```text
 motor_deg = (zero_offset_rad + joint_rad × gear_ratio × direction) × 180 / π
 CAN 指令  = motor_deg を [0, 360) に折り返した値
-joint_rad = remainder(feedback_deg × π / 180 - zero_offset_rad, 2π)
+center = (min_position + max_position) / 2 × gear_ratio × direction
+joint_rad = (center + remainder(feedback_deg × π / 180 - zero_offset_rad - center, 2π))
             × direction / gear_ratio
 ```
+
+位置フィードバックは設定範囲の中心に近い単回転角を選びます
+例えば direction=-1、範囲 [0, π] のとき、PID角180°は関節角 +π として扱います
 
 `zero_offset_rad` は関節ゼロに対応するモータ PID 角度をモータ側 rad で指定します。
 例えば `gear_ratio=2`、`direction=-1`、`zero_offset_rad=π/2` では、

@@ -29,6 +29,7 @@ DriverCore::DriverCore(std::vector<MotorConfig> configs)
   validate_configs(configs);
   motors_.reserve(configs.size());
   for (auto &cfg : configs) {
+    motor_idx_[cfg.motor_id] = motors_.size();
     motors_.emplace_back(std::move(cfg));
   }
 }
@@ -39,21 +40,20 @@ bool DriverCore::receive(const VescFeedback &feedback, TimePoint now)
     return receive_fault(*fault, now);
   }
   const auto motor_id = std::visit([](const auto &value) { return value.motor_id; }, feedback);
-  const auto motor = std::find_if(motors_.begin(), motors_.end(),
-    [motor_id](const auto &motor) { return motor.config().motor_id == motor_id; });
-  return motor != motors_.end() && motor->receive(feedback, now);
+  const auto idx = motor_index(motor_id);
+  return idx && motors_[*idx].receive(feedback, now);
 }
 
 bool DriverCore::receive_fault(const FaultCode &fault, TimePoint now)
 {
-  const auto motor = std::find_if(motors_.begin(), motors_.end(),
-    [&fault](const auto &motor) { return motor.config().motor_id == fault.motor_id; });
-  if (motor == motors_.end()) {
+  const auto idx = motor_index(fault.motor_id);
+  if (!idx) {
     return false;
   }
-  motor->receive_fault(fault, now);
+  auto &motor = motors_[*idx];
+  motor.receive_fault(fault, now);
   if (fault.code != 0 && !faulted_) {
-    stop_on_error(motor->config().name + ": VESC fault_code=" + std::to_string(fault.code));
+    stop_on_error(motor.config().name + ": VESC fault_code=" + std::to_string(fault.code));
   }
   return true;
 }

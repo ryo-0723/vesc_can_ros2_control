@@ -87,7 +87,8 @@ public:
   /// @brief 通信側で保持する動作許可状態を返す
   bool active() const
   {
-    return active_.load();
+    return active_.load() && !stop_requested_.load() && !fault_requested_.load() &&
+           pending_errors_.load() == 0 && !shutdown_started_.load();
   }
 
   /// @brief 通信側で保持する異常停止状態を返す
@@ -170,5 +171,7 @@ private:
   std::atomic<bool> active_{false};
   std::atomic<bool> faulted_{false};
   std::atomic<bool> fault_requested_{false};
+  // Keep named errors pending until their caller has latched the reason under state_mutex_.
+  std::atomic<unsigned int> pending_errors_{0};
 };
 }  // namespace vesc_can_driver

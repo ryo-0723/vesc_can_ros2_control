@@ -163,5 +163,33 @@ TEST_F(NodeTest, RenamedNodesGiveTheirCanNodesDistinctNames)
   }
   EXPECT_TRUE(discovered);
 }
+TEST_F(NodeTest, OversizedCommandArrayIsRejectedBeforeCopyingEntries)
+{
+  auto driver = std::make_shared<VescNode>(options("/oversized", "driver"));
+  auto peer = std::make_shared<rclcpp::Node>("oversized_array_peer");
+  auto commands = peer->create_publisher<Commands>("/oversized/vesc/commands", 10);
+  bool rejected = false;
+  auto events = peer->create_subscription<Event>("/oversized/vesc/event",
+    rclcpp::QoS(1).reliable().transient_local(), [&](Event::ConstSharedPtr event) {
+      rejected = event->logical_id == 1 && event->message == "Too many motor commands in one array";
+    });
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(driver);
+  exec.add_node(peer);
+  const auto deadline = SteadyClock::now() + 2s;
+  Commands batch;
+  batch.commands.resize(1024);
+  for (auto &command : batch.commands) {
+    command.logical_id = 1;
+    command.value = 1.0;
+  }
+  while (!rejected && SteadyClock::now() < deadline) {
+    commands->publish(batch);
+    exec.spin_some();
+    std::this_thread::sleep_for(2ms);
+  }
+  EXPECT_TRUE(rejected);
+}
+
 }  // namespace
 }  // namespace vesc_can_driver
