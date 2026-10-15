@@ -5,31 +5,12 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "vesc_can_driver/can_interface.hpp"
 #include "vesc_can_driver/vesc_transport.hpp"
 namespace vesc_can_driver
 {
 namespace
 {
 using namespace std::chrono_literals;
-struct CanTestOptions : TransportOptions
-{
-  std::string tx_topic{"can/tx"};
-  std::string rx_topic{"can/rx"};
-};
-class CanTestTransport : public VescTransport
-{
-public:
-  CanTestTransport(std::vector<MotorConfig> configs, const CanTestOptions &opts,
-    rclcpp::Node::SharedPtr node, std::function<void(const DriverFault &)> on_fault = {})
-    : VescTransport(configs, opts, node,
-        std::make_unique<CanInterface>(
-          node, CanOptions{opts.tx_topic, opts.rx_topic, opts.fault_period}, configs.size()),
-        std::move(on_fault))
-  {
-  }
-};
-
 class TransportTest : public ::testing::Test
 {
 protected:
@@ -42,6 +23,30 @@ protected:
     rclcpp::shutdown();
   }
 };
+
+TEST_F(TransportTest, RejectsInvalidCanConfigurationBeforeStarting)
+{
+  MotorConfig cfg;
+  cfg.name = "drive";
+  cfg.controller_id = 11;
+  auto node = std::make_shared<rclcpp::Node>("config_test_io", "/config_test");
+  TransportOptions opts;
+  opts.tx_topic = "";
+  EXPECT_THROW(VescTransport({cfg}, opts, node), std::invalid_argument);
+  opts.tx_topic = "can/rx";
+  opts.rx_topic = "/config_test/can/rx";
+  EXPECT_THROW(VescTransport({cfg}, opts, node), std::invalid_argument);
+  opts.tx_topic = "can/tx";
+  opts.send_period = 0ms;
+  EXPECT_THROW(VescTransport({cfg}, opts, node), std::invalid_argument);
+  opts.send_period = 10ms;
+  opts.fault_period = -1ms;
+  EXPECT_THROW(VescTransport({cfg}, opts, node), std::invalid_argument);
+  for (const auto id : {254, 255}) {
+    cfg.controller_id = id;
+    EXPECT_THROW(MotorController{cfg}, std::invalid_argument);
+  }
+}
 
 TEST_F(TransportTest, PendingBatchesUseLatestValuesAndConcurrentUpdatesStayTogether)
 {
@@ -56,7 +61,7 @@ TEST_F(TransportTest, PendingBatchesUseLatestValuesAndConcurrentUpdatesStayToget
   second.name = "second";
   second.motor_id = 2;
   second.controller_id = 12;
-  CanTestOptions opts;
+  TransportOptions opts;
   opts.tx_topic = "/batch_test/tx";
   opts.rx_topic = "/batch_test/rx";
   opts.fault_period = 0ms;
@@ -92,7 +97,7 @@ TEST_F(TransportTest, PendingBatchesUseLatestValuesAndConcurrentUpdatesStayToget
   });
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(peer);
-  CanTestTransport transport({cfg, second}, opts, can_node);
+  VescTransport transport({cfg, second}, opts, can_node);
   const auto wait_for = [&](auto predicate, std::chrono::milliseconds timeout) {
     const auto deadline = SteadyClock::now() + timeout;
     while (SteadyClock::now() < deadline) {
@@ -150,11 +155,11 @@ TEST_F(TransportTest, InvalidBatchStopsBeforeAnyElementIsCommitted)
     second.name = "second";
     second.motor_id = 2;
     second.controller_id = 12;
-    CanTestOptions opts;
+    TransportOptions opts;
     opts.auto_activate = true;
     auto node = std::make_shared<rclcpp::Node>("invalid_batch_io");
     std::vector<DriverFault> faults;
-    CanTestTransport transport(
+    VescTransport transport(
       {cfg, second}, opts, node, [&](const DriverFault &fault) { faults.push_back(fault); });
     ASSERT_TRUE(transport.set_commands({{0, 3.0}, {1, 4.0}}));
     EXPECT_FALSE(transport.set_commands(batch));
@@ -174,7 +179,7 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
   cfg.controller_id = 11;
   cfg.command_timeout = 100ms;
   cfg.feedback_timeout = 100ms;
-  CanTestOptions opts;
+  TransportOptions opts;
   opts.tx_topic = "/transport_test/tx";
   opts.rx_topic = "/transport_test/rx";
   opts.send_period = 5ms;
@@ -198,7 +203,7 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
   });
   rclcpp::executors::SingleThreadedExecutor peer_executor;
   peer_executor.add_node(peer_node);
-  CanTestTransport can_transport({cfg}, opts, can_node);
+  VescTransport can_transport({cfg}, opts, can_node);
   can_transport.start();
   auto spin_peer_until = [&](auto predicate, std::chrono::milliseconds timeout) {
     const auto deadline = SteadyClock::now() + timeout;
@@ -287,7 +292,7 @@ TEST_F(TransportTest, DefaultTimerRepeatsOneCommandAt100Hz)
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
   cfg.feedback_timeout = 2s;
-  CanTestOptions opts;
+  TransportOptions opts;
   opts.tx_topic = "/period_test/tx";
   opts.rx_topic = "/period_test/rx";
   auto peer = std::make_shared<rclcpp::Node>("period_test_peer");
@@ -310,7 +315,7 @@ TEST_F(TransportTest, DefaultTimerRepeatsOneCommandAt100Hz)
   });
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(peer);
-  CanTestTransport transport({cfg}, opts, can_node);
+  VescTransport transport({cfg}, opts, can_node);
   transport.start();
   auto deadline = SteadyClock::now() + 2s;
   while (!transport.snapshot()[0].status1_at && SteadyClock::now() < deadline) {
@@ -349,7 +354,7 @@ TEST_F(TransportTest, FaultCallbackRunsOutsideStateLockWithoutWaitingForSendTime
   cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.feedback_timeout = 2s;
-  CanTestOptions opts;
+  TransportOptions opts;
   opts.send_period = 2s;
   opts.tx_topic = "/fault_test/tx";
   opts.rx_topic = "/fault_test/rx";
@@ -359,8 +364,8 @@ TEST_F(TransportTest, FaultCallbackRunsOutsideStateLockWithoutWaitingForSendTime
     peer->create_publisher<can_msgs::msg::Frame>(opts.rx_topic, rclcpp::SensorDataQoS());
   std::mutex notification_mutex;
   std::vector<std::string> faults;
-  CanTestTransport *transport_ptr = nullptr;
-  CanTestTransport transport({cfg}, opts, can_node, [&](const DriverFault &fault) {
+  VescTransport *transport_ptr = nullptr;
+  VescTransport transport({cfg}, opts, can_node, [&](const DriverFault &fault) {
     const auto states = transport_ptr->snapshot();  // Would deadlock if the callback held the lock.
     std::lock_guard<std::mutex> lock(notification_mutex);
     faults.push_back(fault.reason + ": states=" + std::to_string(states.size()));
@@ -424,7 +429,7 @@ TEST_F(TransportTest, SelectivePollingRoutesDeviceFaultsAndNotifiesOnlyCodeChang
   cfg.motor_id = 1;
   cfg.controller_id = 11;
   cfg.feedback_timeout = 2s;
-  CanTestOptions opts;
+  TransportOptions opts;
   opts.tx_topic = "/device_fault_test/tx";
   opts.rx_topic = "/device_fault_test/rx";
   opts.send_period = 2s;  // Device errors must not wait for the motor command timer.
@@ -457,8 +462,8 @@ TEST_F(TransportTest, SelectivePollingRoutesDeviceFaultsAndNotifiesOnlyCodeChang
   });
   std::mutex mutex;
   std::vector<DriverFault> faults;
-  CanTestTransport *transport_ptr = nullptr;
-  CanTestTransport transport({cfg}, opts, can_node, [&](const DriverFault &fault) {
+  VescTransport *transport_ptr = nullptr;
+  VescTransport transport({cfg}, opts, can_node, [&](const DriverFault &fault) {
     ASSERT_TRUE(fault.device_fault.has_value());
     EXPECT_EQ(transport_ptr->snapshot()[0].fault_code, fault.device_fault->code);
     std::lock_guard<std::mutex> lock(mutex);
@@ -522,16 +527,16 @@ TEST_F(TransportTest, RejectsReservedReplyIdAndIgnoresUnrequestedRepliesWhenPoll
   cfg.controller_id = 11;
   auto peer = std::make_shared<rclcpp::Node>("disabled_fault_peer");
   auto can_node = std::make_shared<rclcpp::Node>("disabled_fault_io");
-  CanTestOptions opts;
+  TransportOptions opts;
   opts.tx_topic = "/disabled_fault_test/tx";
   opts.rx_topic = "/disabled_fault_test/rx";
   cfg.controller_id = 254;
-  EXPECT_THROW(CanTestTransport({cfg}, opts, can_node), std::invalid_argument);
+  EXPECT_THROW(VescTransport({cfg}, opts, can_node), std::invalid_argument);
   cfg.controller_id = 11;
   opts.fault_period = -1ms;
-  EXPECT_THROW(CanTestTransport({cfg}, opts, can_node), std::invalid_argument);
+  EXPECT_THROW(VescTransport({cfg}, opts, can_node), std::invalid_argument);
   opts.fault_period = 0ms;
-  CanTestTransport transport({cfg}, opts, can_node);
+  VescTransport transport({cfg}, opts, can_node);
   auto pub = peer->create_publisher<can_msgs::msg::Frame>(opts.rx_topic, rclcpp::SensorDataQoS());
   transport.start();
   can_msgs::msg::Frame reply;
@@ -560,7 +565,7 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
   second.name = "other";
   second.motor_id = 2;
   second.controller_id = 12;
-  CanTestOptions opts;
+  TransportOptions opts;
   opts.tx_topic = "/auto_reboot_test/tx";
   opts.rx_topic = "/auto_reboot_test/rx";
   opts.auto_activate = true;
@@ -583,7 +588,7 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
       pub->publish(frame);
     }
   });
-  CanTestTransport transport({cfg, second}, opts, can_node);
+  VescTransport transport({cfg, second}, opts, can_node);
   transport.start();
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(peer);

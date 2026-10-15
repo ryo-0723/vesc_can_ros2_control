@@ -100,19 +100,17 @@ VESC Toolで必要なSTATUSの周期送信を有効にします
 | CMake target | ヘッダ | 役割 |
 |---|---|---|
 | vesc_can_driver::protocol | can_protocol.hpp | CANフレームの生成・デコード |
-| vesc_can_driver::motor | motor_controller.hpp | 1台分のモータ制御、ROS・CANフレームに非依存 |
+| vesc_can_driver::motor | motor_controller.hpp | 1台分の設定・状態・制御、CANフレームの生成 |
 | vesc_can_driver::driver | driver_core.hpp | 単体クラスをまとめる複数台管理 |
-| vesc_can_driver::transport | vesc_transport.hpp | 周期処理、最新指令と状態の受け渡し |
-| vesc_can_driver::can | can_interface.hpp | ROS CANトピックを使う通信実装 |
+| vesc_can_driver::transport | vesc_transport.hpp | CAN送受信、周期処理、最新指令と状態の受け渡し |
 | vesc_can_driver::node | vesc_node.hpp | 通常ノード、共通の状態・エラー配信 |
 
 `MotorController` は1台分の制御、`DriverCore` は複数台の管理を担当します
-`VescTransport` は共通の通信管理、`CanInterface` はCANの送受信です
-CAN以外の通信は `VescInterface` を実装して追加できます。UART実装は未追加です
+`VescTransport` はCANトピック、周期送信、故障応答の確認をまとめて担当します
 フレーム処理だけなら `protocol` にリンクします
 指令関数の名前は [公式comm_can.c](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L469-L511) の
 `comm_can_set_duty`、`comm_can_set_current`、`comm_can_set_rpm`、`comm_can_set_pos` に合わせています
-このライブラリの関数はCANフレームを返し、実際の送信はVescTransportが周期的にCanInterfaceへ渡します
+このライブラリの関数はCANフレームを返し、VescTransportが周期的に送信します
 STATUSのデコードなど、このドライバ固有の関数は用途を表す名前にしています
 
 ```cmake

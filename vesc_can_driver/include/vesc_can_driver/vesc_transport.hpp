@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -13,6 +14,8 @@ namespace vesc_can_driver
 {
 struct TransportOptions
 {
+  std::string tx_topic{"can/tx"};
+  std::string rx_topic{"can/rx"};
   std::chrono::milliseconds send_period{10};
   std::chrono::milliseconds fault_period{100};  // 0 disables fault queries
   bool auto_activate{false};  // standalone starts on fresh input; hardware uses lifecycle
@@ -24,20 +27,18 @@ struct DriverFault
   std::optional<FaultCode> device_fault;  // absent for PC/transport errors
 };
 
-/// @brief 専用 executor で VESC の周期送受信を管理
+/// @brief 専用 executor で CAN トピックの送受信と指令周期を管理
 /// @note ros2_control の read/write では ROS 配信を行わない
 class VescTransport
 {
 public:
   /// @brief 通信管理と周期タイマーを作成する，executor は start() で起動
   /// @param configs モータ設定（登録順）
-  /// @param opts 送信周期・故障問い合わせの周期
+  /// @param opts CAN トピック・送信周期・故障問い合わせの周期
   /// @param io_node 通信専用 executor に登録するノード
-  /// @param interface CAN / UART の指令送信と受信値変換の実装
   /// @param on_fault 異常を検出した処理から呼ぶ通知関数，状態ロック外で実行
   VescTransport(std::vector<MotorConfig> configs, TransportOptions opts,
-    rclcpp::Node::SharedPtr io_node, std::unique_ptr<VescInterface> interface,
-    std::function<void(const DriverFault &)> on_fault = {});
+    rclcpp::Node::SharedPtr io_node, std::function<void(const DriverFault &)> on_fault = {});
 
   /// @brief shutdown() を呼び，専用スレッドと通信処理を終了
   ~VescTransport();
@@ -127,13 +128,19 @@ private:
   /// @brief 周期タイマーで最新指令を取り出し，検査・生成して配信
   void send_commands();
 
-  /// @brief 停止要求を反映し，共通指令を通信実装へ渡す
+  /// @brief 停止要求を反映し，CAN フレームを送信する
   void send_outputs();
 
   /// @brief 登録モータへ故障コードを問い合わせる，停止中も継続
   void poll_faults();
 
-  /// @brief 通信実装が確認した受信値を反映し，異常を即時通知
+  /// @brief CAN フレームを検査し，問い合わせ中の故障応答だけを受理
+  void receive_frame(const can_msgs::msg::Frame &frame);
+
+  /// @brief タイムスタンプを設定し，CAN フレームを配信
+  void send_frame(can_msgs::msg::Frame frame);
+
+  /// @brief デコード済みの受信値を反映し，異常を即時通知
   void receive_feedback(const VescFeedback &feedback);
 
   /// @brief 状態ロック外で異常通知を呼び，通知側の例外を記録する
@@ -143,10 +150,13 @@ private:
   TransportOptions opts_;
   rclcpp::Node::SharedPtr io_node_;
   std::function<void(const DriverFault &)> on_fault_;
-  std::unique_ptr<VescInterface> interface_;
+  rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr tx_pub_;
+  rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr rx_sub_;
+  // Accessed only by the communication executor.
+  std::array<std::optional<TimePoint>, 256> fault_requests_;
   rclcpp::TimerBase::SharedPtr send_timer_;
   rclcpp::TimerBase::SharedPtr fault_timer_;
-  // Reboot guards are protected by state_mutex_.
+  // Written by the executor under state_mutex_; other threads read under that lock.
   std::vector<TimePoint> rx_after_;
   rclcpp::executors::SingleThreadedExecutor io_exec_;
   std::thread exec_thread_;
@@ -154,8 +164,7 @@ private:
   std::condition_variable feedback_cv_;
   std::vector<PendingCommand> pending_cmds_;
   std::optional<std::size_t> reboot_idx_;
-  std::vector<VescCommand> outputs_;
-  std::vector<VescCommand> fault_commands_;
+  std::vector<can_msgs::msg::Frame> outputs_;
   std::atomic<bool> shutdown_started_{false};
   std::atomic<bool> stop_requested_{true};
   std::atomic<bool> active_{false};

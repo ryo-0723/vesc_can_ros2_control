@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "vesc_can_driver/can_interface.hpp"
 #include "vesc_can_driver/vesc_transport.hpp"
 #include "vesc_can_msgs/msg/vesc_command_array.hpp"
 #include "vesc_can_msgs/msg/vesc_event.hpp"
@@ -69,7 +68,7 @@ private:
   /// @brief モータごとの ROS パラメータを読み込む
   MotorConfig load_motor_config(const std::string &motor_name);
   /// @brief 同じ namespace / context に専用の通信ノードを作る
-  void initialize_can_transport(const TransportOptions &opts, const CanOptions &can_opts);
+  void initialize_can_transport(const TransportOptions &opts);
   /// @brief 指令トピックと reboot サービスを登録する
   void initialize_command_interfaces();
   /// @brief 状態・エラーの publisher と周期タイマーを作る

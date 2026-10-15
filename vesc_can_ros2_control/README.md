@@ -3,8 +3,7 @@
 複数のVESCを、1つのros2_control SystemInterfaceで管理します
 controller_managerが `vesc_can_ros2_control/VescSystem` を読み込み、通常ノードは起動しません
 CAN通信と状態配信には `vesc_can_driver` を使います
-通信管理はVescTransport、実際のCAN送受信はCanInterfaceです
-別の通信方式はVescInterfaceの実装として追加できます。現在の設定例はCAN用です
+CAN送受信、周期処理、故障応答の確認はVescTransportが担当します
 各Systemが通信スレッドとpublisherを所有し、cleanupで自分の通信だけを終了します
 
 ## 設定例

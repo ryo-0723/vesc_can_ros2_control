@@ -2,9 +2,64 @@
 
 #include <cstdint>
 #include <optional>
+#include <variant>
 
 #include "can_msgs/msg/frame.hpp"
-#include "vesc_can_driver/vesc_interface.hpp"
+
+namespace vesc_can_driver
+{
+struct FaultCode
+{
+  std::uint8_t controller_id{};
+  std::uint8_t code{};
+};
+
+struct MotionFeedback
+{
+  std::uint8_t controller_id{};
+  std::int32_t electrical_rpm{};
+  double motor_current_a{};
+  double duty_cycle{};
+};
+struct ChargeFeedback
+{
+  std::uint8_t controller_id{};
+  double charge_drawn_ah{};
+  double charge_regen_ah{};
+};
+struct EnergyFeedback
+{
+  std::uint8_t controller_id{};
+  double energy_drawn_wh{};
+  double energy_regen_wh{};
+};
+struct ControlFeedback
+{
+  std::uint8_t controller_id{};
+  double temperature_fet_c{};
+  double temperature_motor_c{};
+  double input_current_a{};
+  double motor_pid_position_deg{};
+};
+struct PositionFeedback
+{
+  std::uint8_t controller_id{};
+  std::int32_t tachometer_counts{};
+  double input_voltage_v{};
+};
+struct AnalogFeedback
+{
+  std::uint8_t controller_id{};
+  double adc_1_v{};
+  double adc_2_v{};
+  double adc_3_v{};
+  double ppm{};  // normalized PPM input, dimensionless
+};
+
+/// @brief CAN STATUS1〜6 と故障応答のデコード結果
+using VescFeedback = std::variant<MotionFeedback, ChargeFeedback, EnergyFeedback, ControlFeedback,
+  PositionFeedback, AnalogFeedback, FaultCode>;
+}  // namespace vesc_can_driver
 
 namespace vesc_can_driver::protocol
 {
@@ -56,7 +111,7 @@ using Status5 = PositionFeedback;
 using Status6 = AnalogFeedback;
 
 // 指令関数名は公式 firmware 6.06 の comm_can.c に対応
-// このライブラリでは CAN フレームを返し，送信は CanInterface が担当する
+// このライブラリでは CAN フレームを返し，送信は VescTransport が担当する
 
 /// @brief duty 比の指令フレームを生成
 /// @param controller_id 宛先 ID（0〜254）
@@ -120,9 +175,7 @@ bool decode_status_5(const can_msgs::msg::Frame &frame, Status5 &status);
 /// @param[out] status 正常時に更新するデコード結果
 /// @return 正しい形式なら true，不正フレームでは出力を変更しない
 bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status);
-/// @brief 共通指令を VESC の CAN フレームへ変換する
-can_msgs::msg::Frame encode_command(const VescCommand &command);
-/// @brief CAN の STATUS / 故障応答を共通受信値へ変換する
+/// @brief CAN の STATUS / 故障応答をデコード結果へ変換する
 /// @return 未対応・不正フレームでは nullopt
 std::optional<VescFeedback> decode_feedback(const can_msgs::msg::Frame &frame);
 }  // namespace vesc_can_driver::protocol

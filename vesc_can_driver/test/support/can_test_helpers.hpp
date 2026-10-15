@@ -14,12 +14,7 @@ bool receive_frame(Controller &controller, const can_msgs::msg::Frame &frame, Ti
 inline void make_test_frames(
   DriverCore &core, TimePoint now, std::vector<can_msgs::msg::Frame> &frames)
 {
-  std::vector<VescCommand> commands;
-  core.commands(now, commands);
-  frames.clear();
-  for (const auto &command : commands) {
-    frames.push_back(protocol::encode_command(command));
-  }
+  core.commands(now, frames);
 }
 struct MotorFrameResult
 {
@@ -29,11 +24,10 @@ struct MotorFrameResult
 inline MotorFrameResult motor_frame(MotorController &motor, TimePoint now)
 {
   const auto result = motor.command(now);
-  return {result.error.empty() ? protocol::encode_command(result.command) : can_msgs::msg::Frame{},
-    result.error};
+  return {result.command, result.error};
 }
 inline can_msgs::msg::Frame stop_frame(const MotorController &motor)
 {
-  return protocol::encode_command(motor.stop_command());
+  return motor.stop_command();
 }
 }  // namespace vesc_can_driver

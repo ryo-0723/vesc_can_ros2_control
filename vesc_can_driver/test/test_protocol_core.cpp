@@ -61,16 +61,6 @@ template <typename Status, auto Decode> bool decode_status_frame(const can_msgs:
   }
   return decoded;
 }
-TEST(Protocol, CommonRpmCommandRejectsLossyOrNonFiniteValues)
-{
-  for (double value : {kUnknownValue, 0.5, 2147483648.0, -2147483649.0}) {
-    EXPECT_THROW(
-      protocol::encode_command(VescCommand{11, VescCommandType::Rpm, value}), std::out_of_range);
-  }
-  EXPECT_THROW(protocol::encode_command(VescCommand{11, static_cast<VescCommandType>(255), 0.0}),
-    std::invalid_argument);
-}
-
 TEST(Protocol, CommandsHaveNativeIdAndBigEndianSignedPayload)
 {
   auto frame = protocol::comm_can_set_rpm(11, -123456);
@@ -1153,6 +1143,59 @@ TEST(Core, ModeSpecificCurrentAndStartupLimitsAreValidated)
   invalid = motor;
   invalid.max_current_a = 3e6;
   EXPECT_THROW(DriverCore({invalid}), std::invalid_argument);
+}
+
+TEST(MotorSafety, IndependentMotorChecksAndLatchesTimeoutAndInvalidCommand)
+{
+  MotorConfig cfg;
+  cfg.name = "single";
+  cfg.controller_id = 11;
+  cfg.mode = ControlMode::Current;
+  cfg.command_timeout = 100ms;
+  const auto now = TimePoint(1s);
+  MotorController motor(cfg);
+  ASSERT_TRUE(motor.receive(MotionFeedback{11, 420, 1.5, 0.5}, now));
+  ASSERT_TRUE(motor.set_command(1.0, now));
+  EXPECT_TRUE(motor.command(now).error.empty());
+  const auto expired = motor.command(now + 101ms);
+  EXPECT_EQ(expired.error, "command timeout");
+  EXPECT_EQ(expired.command.id, 0x10Bu);
+  EXPECT_EQ(expired.command.data, protocol::comm_can_set_current(11, 0.0).data);
+  EXPECT_FALSE(motor.set_command(2.0, now + 102ms));
+  motor.reset_command(now + 102ms);
+  ASSERT_TRUE(motor.set_command(2.0, now + 102ms));
+  EXPECT_FALSE(motor.set_command(kUnknownValue, now + 103ms));
+  EXPECT_EQ(motor.command(now + 103ms).error, "invalid command");
+  EXPECT_EQ(motor.command(now + 103ms).command.data, protocol::comm_can_set_current(11, 0.0).data);
+}
+TEST(MotorSafety, FreshFeedbackAndHealthyReplyCannotReplayAFaultedCommand)
+{
+  MotorConfig cfg;
+  cfg.name = "single";
+  cfg.controller_id = 11;
+  cfg.mode = ControlMode::Current;
+  cfg.command_timeout = 2s;
+  cfg.feedback_timeout = 100ms;
+  const auto now = TimePoint(1s);
+  MotorController motor(cfg);
+  ASSERT_TRUE(motor.receive(MotionFeedback{11, 420, 1.5, 0.5}, now));
+  ASSERT_TRUE(motor.set_command(2.0, now));
+  EXPECT_EQ(motor.command(now + 101ms).error, "feedback stale or position outside limits");
+  ASSERT_TRUE(motor.receive(MotionFeedback{11, 420, 1.5, 0.5}, now + 102ms));
+  EXPECT_FALSE(motor.command(now + 102ms).error.empty());
+  EXPECT_FALSE(motor.set_command(1.0, now + 102ms));
+  motor.reset_command(now + 103ms);
+  ASSERT_TRUE(motor.set_command(1.0, now + 103ms));
+  ASSERT_TRUE(motor.receive(FaultCode{11, 4}, now + 104ms));
+  EXPECT_EQ(motor.command(now + 104ms).error, "VESC fault");
+  EXPECT_EQ(motor.command(now + 104ms).command.data, protocol::comm_can_set_current(11, 0.0).data);
+  ASSERT_TRUE(motor.receive(FaultCode{11, 0}, now + 105ms));
+  EXPECT_FALSE(motor.set_command(3.0, now + 105ms));
+  motor.reset_command(now + 106ms);
+  EXPECT_TRUE(motor.command(now + 106ms).error.empty());
+  EXPECT_EQ(motor.command(now + 106ms).command.data, protocol::comm_can_set_current(11, 0.0).data);
+  ASSERT_TRUE(motor.set_command(3.0, now + 107ms));
+  EXPECT_EQ(motor.command(now + 107ms).command.data, protocol::comm_can_set_current(11, 3.0).data);
 }
 
 }  // namespace

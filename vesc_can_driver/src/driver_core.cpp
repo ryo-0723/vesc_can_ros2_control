@@ -16,8 +16,8 @@ void validate_configs(const std::vector<MotorConfig> &configs)
   std::set<std::uint8_t> ids;
   for (const auto &cfg : configs) {
     MotorController::validate_config(cfg);
-    if (cfg.name.empty() || !names.insert(cfg.name).second ||
-        !motor_ids.insert(cfg.motor_id).second || !ids.insert(cfg.controller_id).second) {
+    if (!names.insert(cfg.name).second || !motor_ids.insert(cfg.motor_id).second ||
+        !ids.insert(cfg.controller_id).second) {
       throw std::invalid_argument("Motor names, logical IDs and controller IDs must be unique");
     }
   }
@@ -118,7 +118,7 @@ bool DriverCore::set_command(std::size_t idx, double value, TimePoint now)
   return true;
 }
 
-void DriverCore::stop_commands(std::vector<VescCommand> &outputs) const
+void DriverCore::stop_commands(std::vector<can_msgs::msg::Frame> &outputs) const
 {
   outputs.clear();
   for (const auto &motor : motors_) {
@@ -126,7 +126,7 @@ void DriverCore::stop_commands(std::vector<VescCommand> &outputs) const
   }
 }
 
-void DriverCore::commands(TimePoint now, std::vector<VescCommand> &outputs)
+void DriverCore::commands(TimePoint now, std::vector<can_msgs::msg::Frame> &outputs)
 {
   if (!active_) {
     stop_commands(outputs);

@@ -29,15 +29,12 @@ target_include_directories(vesc_can_driver_motor PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 
+target_link_libraries(vesc_can_driver_motor PUBLIC vesc_can_driver::protocol)
+
 add_library(vesc_can_driver_driver SHARED src/driver_core.cpp)
 add_library(vesc_can_driver::driver ALIAS vesc_can_driver_driver)
 set_target_properties(vesc_can_driver_driver PROPERTIES EXPORT_NAME driver)
 target_link_libraries(vesc_can_driver_driver PUBLIC vesc_can_driver::motor)
-
-add_library(vesc_can_driver_can SHARED src/can_interface.cpp)
-add_library(vesc_can_driver::can ALIAS vesc_can_driver_can)
-set_target_properties(vesc_can_driver_can PROPERTIES EXPORT_NAME can)
-target_link_libraries(vesc_can_driver_can PUBLIC vesc_can_driver::protocol rclcpp::rclcpp)
 
 add_library(vesc_can_driver_transport SHARED src/vesc_transport.cpp)
 add_library(vesc_can_driver::transport ALIAS vesc_can_driver_transport)
@@ -49,7 +46,7 @@ add_library(vesc_can_driver_node SHARED src/vesc_node.cpp)
 add_library(vesc_can_driver::node ALIAS vesc_can_driver_node)
 set_target_properties(vesc_can_driver_node PROPERTIES EXPORT_NAME node)
 target_link_libraries(vesc_can_driver_node PUBLIC
-  vesc_can_driver::transport vesc_can_driver::can ${vesc_can_msgs_TARGETS} ${rcl_interfaces_TARGETS})
+  vesc_can_driver::transport ${vesc_can_msgs_TARGETS} ${rcl_interfaces_TARGETS})
 
 add_executable(vesc_node src/vesc_main.cpp)
 target_link_libraries(vesc_node PRIVATE vesc_can_driver::node)
@@ -58,7 +55,7 @@ add_executable(fake_vesc_node test/support/fake_vesc_node.cpp)
 target_link_libraries(fake_vesc_node PRIVATE vesc_can_driver::driver vesc_can_driver::protocol rclcpp::rclcpp)
 
 install(TARGETS vesc_can_driver_protocol vesc_can_driver_motor vesc_can_driver_driver
-  vesc_can_driver_can vesc_can_driver_transport vesc_can_driver_node
+  vesc_can_driver_transport vesc_can_driver_node
   EXPORT export_vesc_can_driver
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(TARGETS vesc_node fake_vesc_node DESTINATION lib/${PROJECT_NAME})
@@ -72,9 +69,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_protocol_core test/test_protocol_core.cpp)
   target_link_libraries(test_protocol_core vesc_can_driver::driver vesc_can_driver::protocol)
   ament_add_gtest(test_transport test/test_transport.cpp TIMEOUT 30)
-  target_link_libraries(test_transport vesc_can_driver::transport vesc_can_driver::can)
-  ament_add_gtest(test_interface test/test_interface.cpp TIMEOUT 30)
-  target_link_libraries(test_interface vesc_can_driver::transport)
+  target_link_libraries(test_transport vesc_can_driver::transport)
   ament_add_gtest(test_node test/test_node.cpp TIMEOUT 30)
   target_link_libraries(test_node vesc_can_driver::node)
   ament_add_gtest(test_state_conversion test/test_state_conversion.cpp)

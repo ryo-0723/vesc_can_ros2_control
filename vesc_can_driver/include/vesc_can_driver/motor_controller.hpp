@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-#include "vesc_can_driver/vesc_interface.hpp"
+#include "vesc_can_driver/can_protocol.hpp"
 namespace vesc_can_driver
 {
 using SteadyClock = std::chrono::steady_clock;
@@ -95,12 +95,6 @@ struct MotorState
   std::optional<TimePoint> status6_at;
 };
 
-struct MotorCommand
-{
-  std::size_t motor_idx{};
-  double value{};  // Units follow the motor's fixed control mode.
-};
-
 /// @brief 関節速度 [rad/s] を VESC の電気回転数 [ERPM] に変換
 double vel_to_erpm(const MotorConfig &cfg, double vel_rad_s);
 
@@ -139,7 +133,7 @@ class MotorController
 public:
   struct CommandResult
   {
-    VescCommand command;
+    can_msgs::msg::Frame command;
     std::string_view error;  // Empty on success; otherwise a static error description.
   };
 
@@ -172,11 +166,11 @@ public:
   bool set_command(double value, TimePoint now);
   /// @brief 必須フィードバックと指令期限を確認し，正常なら空文字列を返す
   std::string_view command_error(TimePoint now) const;
-  /// @brief このモータの指令共通指令を生成し，失敗時は error に理由を返す
+  /// @brief このモータのCAN 指令フレームを生成し，失敗時は error に理由を返す
   /// @note 異常時は単体の停止を保持し，error とゼロ電流指令を返す
   CommandResult command(TimePoint now);
-  /// @brief このモータのゼロ電流共通指令を生成
-  VescCommand stop_command() const;
+  /// @brief このモータのゼロ電流フレームを生成
+  can_msgs::msg::Frame stop_command() const;
 
 private:
   struct Command

@@ -80,7 +80,6 @@ private:
   std::vector<hardware_interface::CommandInterface::SharedPtr> cmd_handles_;
   std::vector<StateHandle> state_handles_;
   vesc_can_driver::TransportOptions opts_;
-  vesc_can_driver::CanOptions can_opts_;
   std::chrono::milliseconds activation_timeout_{2000};
   std::chrono::milliseconds state_period_{20};
   // Transport must join its callbacks before publishers are destroyed.

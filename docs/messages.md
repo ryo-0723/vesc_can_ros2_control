@@ -260,16 +260,16 @@ DriverCoreの設定・状態の参照は `motors()[i].config()` / `motors()[i].s
 `motor_configs()` / `states()` は廃止し、各MotorControllerが設定・状態を所有します
 動作許可・異常の取得は `is_active()` / `is_faulted()` を使います
 
-## 通信方式を分けるC++ API
+## CAN通信のC++ API
 
-単体の制御は `motor_controller.hpp`、複数台のラッパーは `driver_core.hpp`、通信管理は `vesc_transport.hpp` です
-従来のCanTransportはVescTransportへ変更し、コンストラクタにVescInterfaceの実装を渡します
-CANトピック名はCanOptions、送信・故障問い合わせの周期はTransportOptionsに分けています
-MotorControllerの `command()` はVescCommandを返し、DriverCoreは `commands()` で配列にまとめます
-受信にはCANフレームではなく、デコード済みのVescFeedbackを渡します
-CANのフレーム処理には `can_protocol.hpp` とcomm_can_set_*を使います
-ROSのmsg、トピック名、YAML・URDFのパラメータ名は変更していません
-UARTの追加時に必要な処理は [内部構成](architecture.md#canとuartの境界) にまとめています
+単体の制御は `motor_controller.hpp`、複数台のラッパーは `driver_core.hpp`、CAN通信管理は `vesc_transport.hpp` です
+VescTransportには設定・TransportOptions・通信ノード・任意の異常通知関数を渡します
+CANトピック名と周期はTransportOptionsにまとめています
+MotorControllerの `command()` はCANフレームと検査結果を返し、DriverCoreの `commands()` は全台分のフレームを生成します
+受信には `can_protocol.hpp` でデコードしたVescFeedbackを渡します
+旧VescInterface・CanInterfaceと、内部用VescCommand・CanOptionsは廃止しました
+CMakeの `vesc_can_driver::can` は削除し、CAN通信管理には `vesc_can_driver::transport` を使います
+ROSのmsg、トピック名、YAML・URDFのパラメータ名は同じです
 
 ## C++ファイル名の整理
 

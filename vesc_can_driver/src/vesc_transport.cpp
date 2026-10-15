@@ -6,27 +6,34 @@
 #include <utility>
 namespace vesc_can_driver
 {
-// VESC transport: executor, latest commands and periodic transmission.
+// CAN communication, latest commands and periodic transmission.
 VescTransport::VescTransport(std::vector<MotorConfig> configs, TransportOptions opts,
-  rclcpp::Node::SharedPtr io_node, std::unique_ptr<VescInterface> interface,
-  std::function<void(const DriverFault &)> on_fault)
+  rclcpp::Node::SharedPtr io_node, std::function<void(const DriverFault &)> on_fault)
   : core_(std::move(configs)), opts_(std::move(opts)), io_node_(std::move(io_node)),
-    on_fault_(std::move(on_fault)), interface_(std::move(interface)),
-    rx_after_(core_.motors().size()), pending_cmds_(core_.motors().size())
+    on_fault_(std::move(on_fault)), rx_after_(core_.motors().size()),
+    pending_cmds_(core_.motors().size())
 {
-  if (!io_node_ || opts_.send_period.count() <= 0 || !interface_) {
-    throw std::invalid_argument("Invalid VESC transport node, interface or period");
+  if (!io_node_ || opts_.send_period.count() <= 0) {
+    throw std::invalid_argument("Invalid CAN transport node or period");
   }
   if (opts_.fault_period.count() < 0) {
     throw std::invalid_argument("Fault query period must be non-negative");
   }
-  std::vector<std::uint8_t> ids;
-  for (const auto &motor : core_.motors()) {
-    ids.push_back(motor.config().controller_id);
+  if (opts_.tx_topic.empty() || opts_.rx_topic.empty()) {
+    throw std::invalid_argument("CAN topics must not be empty");
   }
-  interface_->configure_targets(ids);
+  const auto topics = io_node_->get_node_topics_interface();
+  if (topics->resolve_topic_name(opts_.tx_topic) == topics->resolve_topic_name(opts_.rx_topic)) {
+    throw std::invalid_argument("CAN TX and RX topics must be different");
+  }
+  tx_pub_ = io_node_->create_publisher<can_msgs::msg::Frame>(
+    opts_.tx_topic, rclcpp::QoS(std::max<std::size_t>(50, core_.motors().size() * 4))
+                      .reliable()
+                      .durability_volatile());
+  rx_sub_ = io_node_->create_subscription<can_msgs::msg::Frame>(opts_.rx_topic,
+    rclcpp::SensorDataQoS().keep_last(512),
+    [this](can_msgs::msg::Frame::ConstSharedPtr frame) { receive_frame(*frame); });
   outputs_.reserve(core_.motors().size());
-  fault_commands_.reserve(core_.motors().size());
   send_timer_ = io_node_->create_wall_timer(opts_.send_period, [this]() { send_commands(); });
   if (opts_.fault_period.count() > 0) {
     fault_timer_ = io_node_->create_wall_timer(opts_.fault_period, [this]() { poll_faults(); });
@@ -47,8 +54,6 @@ void VescTransport::start()
   if (exec_thread_.joinable()) {
     throw std::logic_error("Transport already started");
   }
-  interface_->start([this](const VescFeedback &feedback) { receive_feedback(feedback); },
-    [this](const std::string &reason) { stop_on_error(reason); });
   exec_thread_ = std::thread([this]() {
     try {
       io_exec_.spin();
@@ -84,7 +89,6 @@ void VescTransport::shutdown() noexcept
   } catch (const std::exception &) {
     // Destruction cannot guarantee network delivery; MCU/VESC watchdogs remain necessary.
   }
-  interface_->stop();
   feedback_cv_.notify_all();
 }
 
@@ -171,7 +175,8 @@ bool VescTransport::try_set_commands(const std::vector<double> &values)
     }
   }
   std::unique_lock<std::mutex> state_lock(state_mutex_, std::try_to_lock);
-  if (!state_lock.owns_lock()) {
+  if (!state_lock.owns_lock() || !active_.load() || stop_requested_.load() ||
+      shutdown_started_.load()) {
     return false;
   }
   const auto received_at = SteadyClock::now();
@@ -252,14 +257,15 @@ std::string VescTransport::fault_reason()
 void VescTransport::send_commands()
 {
   std::string new_fault;
-  std::optional<VescCommand> reboot_command;
+  std::optional<can_msgs::msg::Frame> reboot_command;
   {
     std::lock_guard<std::mutex> state_lock(state_mutex_);
     const auto now = SteadyClock::now();
     if (reboot_idx_) {
       const auto idx = *reboot_idx_;
-      reboot_command =
-        VescCommand{core_.motors()[idx].config().controller_id, VescCommandType::Reboot, 0.0};
+      const auto id = core_.motors()[idx].config().controller_id;
+      reboot_command = protocol::make_reboot_frame(id);
+      fault_requests_[id].reset();
       core_.reset(idx);
       // Discard queued pre-reboot feedback while the VESC restarts.
       rx_after_[idx] = now + std::chrono::milliseconds(500);
@@ -306,7 +312,7 @@ void VescTransport::send_commands()
   }
   send_outputs();
   if (reboot_command) {
-    interface_->send(*reboot_command);
+    send_frame(*reboot_command);
   }
   if (!new_fault.empty()) {
     notify_fault({new_fault, std::nullopt});
@@ -315,22 +321,42 @@ void VescTransport::send_commands()
 
 void VescTransport::poll_faults()
 {
-  fault_commands_.clear();
-  {
-    std::lock_guard<std::mutex> state_lock(state_mutex_);
-    const auto now = SteadyClock::now();
-    const auto &motors = core_.motors();
-    for (std::size_t idx = 0; idx < motors.size(); ++idx) {
-      if (now < rx_after_[idx]) {
-        continue;
-      }
-      fault_commands_.push_back(
-        {motors[idx].config().controller_id, VescCommandType::FaultRequest, 0.0});
+  // Reboot guards are written by this executor, so polling needs no state lock.
+  const auto now = SteadyClock::now();
+  for (std::size_t idx = 0; idx < core_.motors().size(); ++idx) {
+    if (now < rx_after_[idx]) {
+      continue;
     }
+    const auto id = core_.motors()[idx].config().controller_id;
+    fault_requests_[id] = SteadyClock::now();
+    send_frame(protocol::make_fault_request(id));
   }
-  for (const auto &request : fault_commands_) {
-    interface_->send(request);
+}
+
+void VescTransport::receive_frame(const can_msgs::msg::Frame &frame)
+{
+  if (frame.is_error) {
+    stop_on_error("CAN error frame received: id=" + std::to_string(frame.id));
+    return;
   }
+  const auto feedback = protocol::decode_feedback(frame);
+  if (!feedback) {
+    return;
+  }
+  if (const auto *fault = std::get_if<FaultCode>(&*feedback)) {
+    auto &requested_at = fault_requests_[fault->controller_id];
+    if (!feedback_fresh(requested_at, SteadyClock::now(), opts_.fault_period)) {
+      return;
+    }
+    requested_at.reset();
+  }
+  receive_feedback(*feedback);
+}
+
+void VescTransport::send_frame(can_msgs::msg::Frame frame)
+{
+  frame.header.stamp = io_node_->now();
+  tx_pub_->publish(frame);
 }
 
 void VescTransport::receive_feedback(const VescFeedback &feedback)
@@ -393,9 +419,10 @@ void VescTransport::send_outputs()
 {
   for (auto command : outputs_) {
     if (stop_requested_.load()) {
-      command = {command.controller_id, VescCommandType::Current, 0.0};
+      command = protocol::comm_can_set_current(
+        static_cast<std::uint8_t>(command.id & protocol::kControllerIdMask), 0.0);
     }
-    interface_->send(command);
+    send_frame(command);
   }
 }
 }  // namespace vesc_can_driver

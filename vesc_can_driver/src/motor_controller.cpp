@@ -99,6 +99,9 @@ double apply_direction(const MotorConfig &cfg, double value)
 void MotorController::validate_config(const MotorConfig &cfg)
 {
   command_interface(cfg.mode);  // Reject invalid enum values as well.
+  if (cfg.name.empty() || cfg.controller_id >= protocol::kReplyCanId) {
+    throw std::invalid_argument("Motor name is required and CAN ID must be in [0, 253]");
+  }
   const std::array numeric_settings = {cfg.pole_pairs, cfg.gear_ratio, cfg.direction,
     cfg.zero_offset_rad, cfg.max_vel_rad_s, cfg.max_current_a, cfg.max_duty, cfg.min_pos_rad,
     cfg.max_pos_rad, cfg.vel_slew_rad_s2, cfg.startup_current_a, cfg.rpm_threshold};
@@ -107,12 +110,11 @@ void MotorController::validate_config(const MotorConfig &cfg)
       throw std::invalid_argument(cfg.name + ": non-finite setting");
     }
   }
-  if (cfg.controller_id == 255 || cfg.pole_pairs <= 0.0 ||
-      std::floor(cfg.pole_pairs) != cfg.pole_pairs || cfg.gear_ratio <= 0.0 ||
-      std::abs(cfg.direction) != 1.0 || cfg.max_vel_rad_s <= 0.0 || cfg.max_current_a <= 0.0 ||
-      cfg.vel_slew_rad_s2 <= 0.0 || cfg.startup_current_a < 0.0 || cfg.rpm_threshold < 0.0 ||
-      cfg.feedback_timeout.count() <= 0 || cfg.command_timeout.count() <= 0 ||
-      cfg.startup_timeout.count() <= 0) {
+  if (cfg.pole_pairs <= 0.0 || std::floor(cfg.pole_pairs) != cfg.pole_pairs ||
+      cfg.gear_ratio <= 0.0 || std::abs(cfg.direction) != 1.0 || cfg.max_vel_rad_s <= 0.0 ||
+      cfg.max_current_a <= 0.0 || cfg.vel_slew_rad_s2 <= 0.0 || cfg.startup_current_a < 0.0 ||
+      cfg.rpm_threshold < 0.0 || cfg.feedback_timeout.count() <= 0 ||
+      cfg.command_timeout.count() <= 0 || cfg.startup_timeout.count() <= 0) {
     throw std::invalid_argument(cfg.name + ": invalid motor limits or timing");
   }
   if (cfg.max_duty <= 0.0 || cfg.max_duty > 1.0) {
@@ -190,9 +192,6 @@ bool state_ready(const MotorConfig &cfg, const MotorState &state, TimePoint now)
 MotorController::MotorController(MotorConfig config) : config_(std::move(config))
 {
   validate_config(config_);
-  if (config_.name.empty()) {
-    throw std::invalid_argument("Motor name must not be empty");
-  }
 }
 
 bool MotorController::receive(const VescFeedback &feedback, TimePoint now)
@@ -313,9 +312,9 @@ std::string_view MotorController::command_error(TimePoint now) const
   return {};
 }
 
-VescCommand MotorController::stop_command() const
+can_msgs::msg::Frame MotorController::stop_command() const
 {
-  return VescCommand{config_.controller_id, VescCommandType::Current, 0.0};
+  return protocol::comm_can_set_current(config_.controller_id, 0.0);
 }
 
 MotorController::CommandResult MotorController::command(TimePoint now)
@@ -333,21 +332,16 @@ MotorController::CommandResult MotorController::command(TimePoint now)
   if (!cmd.received_at || (cfg.mode != ControlMode::Position && cmd.target == 0.0)) {
     cmd.ramp_vel = 0.0;
     cmd.rpm_control_active = false;
-    return {
-      VescCommand{cfg.controller_id, VescCommandType::Current, apply_direction(cfg, 0.0)}, {}};
+    return {stop_command(), {}};
   }
   switch (cfg.mode) {
     case ControlMode::Current:
       return {
-        VescCommand{cfg.controller_id, VescCommandType::Current, apply_direction(cfg, cmd.target)},
-        {}};
+        protocol::comm_can_set_current(cfg.controller_id, apply_direction(cfg, cmd.target)), {}};
     case ControlMode::DutyCycle:
-      return {
-        VescCommand{cfg.controller_id, VescCommandType::Duty, apply_direction(cfg, cmd.target)},
-        {}};
+      return {protocol::comm_can_set_duty(cfg.controller_id, apply_direction(cfg, cmd.target)), {}};
     case ControlMode::Position:
-      return {
-        VescCommand{cfg.controller_id, VescCommandType::Position, pos_to_deg(cfg, cmd.target)}, {}};
+      return {protocol::comm_can_set_pos(cfg.controller_id, pos_to_deg(cfg, cmd.target)), {}};
     case ControlMode::CurrentVelocity: {
       const auto &state = state_;
       const double rpm_per_vel = cfg.gear_ratio * 60.0 / (2.0 * kPi);
@@ -365,8 +359,8 @@ MotorController::CommandResult MotorController::command(TimePoint now)
           cmd_ = Command{};
           return {stop_command(), fault_reason_};
         }
-        return {VescCommand{cfg.controller_id, VescCommandType::Current,
-                  apply_direction(cfg, std::copysign(cfg.startup_current_a, cmd.target))},
+        return {protocol::comm_can_set_current(cfg.controller_id,
+                  apply_direction(cfg, std::copysign(cfg.startup_current_a, cmd.target))),
           {}};
       }
       // Once startup finishes, use the same velocity ramp as direct velocity mode.
@@ -379,9 +373,7 @@ MotorController::CommandResult MotorController::command(TimePoint now)
       cmd.ramp_vel += std::clamp(cmd.target - cmd.ramp_vel, -max_step, max_step);
       const auto electrical_rpm =
         static_cast<std::int32_t>(std::llround(vel_to_erpm(cfg, cmd.ramp_vel)));
-      return {
-        VescCommand{cfg.controller_id, VescCommandType::Rpm, static_cast<double>(electrical_rpm)},
-        {}};
+      return {protocol::comm_can_set_rpm(cfg.controller_id, electrical_rpm), {}};
     }
   }
   fault_reason_ = "unsupported control mode";

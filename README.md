@@ -111,7 +111,7 @@ colcon test --packages-select vesc_can_driver vesc_can_ros2_control
 colcon test-result --verbose
 ```
 
-模擬CANと別の通信実装を使うテストで、制御・状態配信・異常停止を確認しています
+模擬CANを使うテストで、制御・状態配信・異常停止を確認しています
 実VESC・実CANバス・Zenoh picoの中継器は未検証です → [検証記録](docs/validation.md)
 
 ## 参考・ライセンス

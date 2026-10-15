@@ -213,31 +213,6 @@ bool decode_status_6(const can_msgs::msg::Frame &frame, Status6 &status)
   return true;
 }
 
-can_msgs::msg::Frame encode_command(const VescCommand &command)
-{
-  switch (command.type) {
-    case VescCommandType::Duty:
-      return comm_can_set_duty(command.controller_id, command.value);
-    case VescCommandType::Current:
-      return comm_can_set_current(command.controller_id, command.value);
-    case VescCommandType::Rpm:
-      if (!std::isfinite(command.value) ||
-          command.value < std::numeric_limits<std::int32_t>::min() ||
-          command.value > std::numeric_limits<std::int32_t>::max() ||
-          std::trunc(command.value) != command.value) {
-        throw std::out_of_range("RPM command must be an int32 ERPM value");
-      }
-      return comm_can_set_rpm(command.controller_id, static_cast<std::int32_t>(command.value));
-    case VescCommandType::Position:
-      return comm_can_set_pos(command.controller_id, command.value);
-    case VescCommandType::FaultRequest:
-      return make_fault_request(command.controller_id);
-    case VescCommandType::Reboot:
-      return make_reboot_frame(command.controller_id);
-  }
-  throw std::invalid_argument("Unsupported VESC command type");
-}
-
 std::optional<VescFeedback> decode_feedback(const can_msgs::msg::Frame &frame)
 {
   Status1 s1;

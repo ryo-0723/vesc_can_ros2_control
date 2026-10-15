@@ -9,9 +9,7 @@ msgだけを使う上位ノードは `vesc_can_msgs` に依存します
 |---|---|
 | [motor_controller.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/motor_controller.hpp) | 1台分の設定・状態・指令、単位変換、5モード、期限と異常の検査 |
 | [driver_core.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/driver_core.hpp) | MotorControllerの一覧を持つラッパー、受信先の振り分け、全台の動作許可・停止 |
-| [vesc_interface.hpp](../vesc_can_driver/include/vesc_can_driver/vesc_interface.hpp) | 通信方式に依存しない指令・受信値とVescInterface |
-| [vesc_transport.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/vesc_transport.hpp) | VescTransport、周期処理、最新指令、スレッド間の受け渡し |
-| [can_interface.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/can_interface.hpp) | VescInterfaceのCAN実装、ROSのCANトピック、故障応答の対応確認 |
+| [vesc_transport.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/vesc_transport.hpp) | CAN送受信、周期処理、故障応答の照合、スレッド間の受け渡し |
 | [can_protocol.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/can_protocol.hpp) | CANのID・ペイロード形式、フレームの生成とデコード |
 | [vesc_node.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/vesc_node.hpp) | 通常ノード、共通の状態・エラー配信 |
 | [vesc_system.hpp / cpp](../vesc_can_ros2_control/include/vesc_can_ros2_control/vesc_system.hpp) | ros2_controlのinterfaceとlifecycle |
@@ -27,46 +25,30 @@ flowchart TD
   N[通常ノード / VescSystem] --> T[VescTransport]
   T --> D[DriverCore: 複数台の管理]
   D --> M[MotorController: 1台分の制御]
-  T --> I[VescInterface]
-  I --> C[CanInterface: 実装済み]
-  I -.-> U[UART実装: 今後追加]
-  C --> P[CANプロトコルとROS CANトピック]
+  T --> P[CANプロトコル]
+  M --> P
+  T --> C[ROS CANトピック]
 ```
 
-VescTransportがDriverCoreと、選択した通信実装を所有します
-DriverCoreは `vector<MotorController>` を所有し、各モータが設定・状態・指令を1組ずつ持ちます
-CAN実装はモータ一覧を所有せず、共通指令と受信値の変換を担当します
-このため、通信方式を交換しても単体・複数台の制御を共用できます
+VescTransportがCANのpublisher・subscriptionとDriverCoreを所有します
+DriverCoreは `vector<MotorController>` を持ち、各モータが設定・状態・指令を1組ずつ管理します
+CANフレームの生成とデコードはcan_protocolにまとめます
 
 通常ノードとhardware pluginは、それぞれ自分のVescTransportとMotorStatePublisherを所有します
 `unique_ptr` は各インスタンスの所有者を表し、ノードの起動数を制限しません
 状態配信のクラスは共用し、hardware pluginから通常ノードを起動することはありません
 
-## CANとUARTの境界
+## 指令と受信の流れ
 
-MotorControllerはCANフレームを返しません
-`VescCommand` に接続先ID、電流・ERPM・PID角度・duty比などの操作と値を入れます
-CanInterfaceがCANフレームに変換して送り、受信したCANフレームはデコード済みの `VescFeedback` に戻します
-単体制御とDriverCoreは、ROSノードやCANのmsgをincludeせずビルドできます
+上位ノードの指令値は、モータごとの未送信値として保存します
+100 HzのタイマーでDriverCoreが各MotorControllerを呼び、モードに応じたCANフレームを生成します
+VescTransportはタイムスタンプを付けてCANトピックへ配信します
+内部指令を別の形式へ変換する中継クラスは置きません
 
-UARTを追加するときはVescInterfaceを実装し、通常ノードやhardware pluginで生成する通信実装を交換します
-差し替えは生成時に行います。UARTでは接続先IDとシリアルポートの対応も通信実装で管理します
-現在のYAML・URDFとlaunchはCAN用です。UARTのポート設定や送受信実装はまだ追加していません
-UART実装ではCOMMコマンドの生成、長さ・CRC・終端を含むパケット処理、受信値の変換が必要です
-CANのフレーム全体をUARTへ流すことはできません → [公式packet.c](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/packet.c)
-
-VescInterfaceの約束は次の通りです
-
-- `configure_targets()`：接続先を登録し、通信方式ごとのIDや接続設定を検査する
-- `start()`：受信値とエラーの通知先を設定し、受信処理を始める
-- `send()`：共通指令を変換して送る。送信中に受信を通知してもよい
-- `stop()`：受信処理を終了し、戻った後は通知しない。独自スレッドがあればjoinする
-
-受信値は、速度・電流・duty、温度・PID角、積算角用カウントなどのブロックで通知します
-UARTの応答を分けて通知する場合も、取得できた項目だけを渡し、欠測項目をゼロで補いません
-内部の `status1_at` などは対応するブロックの受信時刻です
-故障コードは通信実装が応答の妥当性を確認してから通知します
-CANでは問い合わせ中の宛先と受信期限を照合し、UART固有の受信処理へCANの照合条件を持ち込みません
+受信はcan_protocolで1回デコードし、DriverCoreがCAN IDに対応するモータへ振り分けます
+単体側で関節単位への変換と各STATUSの受信時刻を更新します
+欠測項目はゼロで補わず、未受信・期限切れの値は状態配信時にNaNにします
+故障応答はVescTransportで問い合わせ先と受信期限を確認してから反映します
 
 ## 単体制御と全台停止
 
@@ -90,7 +72,8 @@ VescTransportは専用executorを1つ持ち、100 Hzで最新指令を取り出�
 
 hardwareのread/writeは事前確保した配列をtry-lockで受け渡し、ROS配信や通信待機を行いません
 競合時は次周期へ延期し、前回状態にも鮮度判定を適用します
-問い合わせや送信は状態ロックを解放してから通信実装へ渡すため、その場で受信通知されてもロックを待ち合いません
+CAN受信・周期送信・故障問い合わせは同じexecutorで実行します
+状態ロックは指令と状態の受け渡しに使い、CAN配信や異常通知はロックを解放してから行います
 この構成で実行周期を保証するものではなく、実機負荷での確認は必要です
 
 ## 複数起動と終了
@@ -101,6 +84,6 @@ namespaceが `/front` なら、`vesc/commands` は `/front/vesc/commands` にな
 CANブリッジを共有するときは同じ絶対CANトピックを指定し、物理CAN IDを重複させません
 同じモータを複数のノードから操作しない構成にします
 
-終了時は周期処理を停止・joinし、停止指令の送信を試みてから通信実装を終了します
-通信実装の受信処理も終了してからpublisherを破棄します
+終了時は通信executorを停止・joinし、停止指令の送信を試みます
+状態・エラーのpublisherは通信処理の終了後に破棄します
 controller_managerのexecutorは止めず、自分が所有する通信処理だけを終了します

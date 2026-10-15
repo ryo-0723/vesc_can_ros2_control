@@ -1,9 +1,16 @@
 #pragma once
+#include <cstddef>
 #include <vector>
 
 #include "vesc_can_driver/motor_controller.hpp"
 namespace vesc_can_driver
 {
+struct MotorCommand
+{
+  std::size_t motor_idx{};
+  double value{};  // Units follow the motor's fixed control mode.
+};
+
 /// @brief モータ一覧の設定範囲と，名前・論理 ID・接続先 ID の重複を検査
 void validate_configs(const std::vector<MotorConfig> &configs);
 
@@ -74,13 +81,13 @@ public:
   /// @return 受理時は true，不正値では全台を異常停止
   bool set_command(std::size_t idx, double value, TimePoint now);
 
-  /// @brief 最新指令から全台分の共通指令を生成し，無効・異常時はゼロ電流に
+  /// @brief 最新指令から全台分の CAN フレームを生成し，無効・異常時はゼロ電流に
   /// @param now 期限判定と速度ランプに使う単調時刻
-  /// @param[out] frames 生成結果で上書きする共通指令配列
-  void commands(TimePoint now, std::vector<VescCommand> &commands);
+  /// @param[out] commands 生成結果で上書きするCAN フレーム配列
+  void commands(TimePoint now, std::vector<can_msgs::msg::Frame> &commands);
 
-  /// @brief 全台分のゼロ電流共通指令で配列を上書き
-  void stop_commands(std::vector<VescCommand> &commands) const;
+  /// @brief 全台分のゼロ電流フレームで配列を上書き
+  void stop_commands(std::vector<can_msgs::msg::Frame> &commands) const;
 
 private:
   std::vector<MotorController> motors_;
