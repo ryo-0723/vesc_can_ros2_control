@@ -12,7 +12,9 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_mock", default_value="false"),
-            DeclareLaunchArgument("config", default_value=str(pkg_dir / "config/standalone.yaml")),
+            DeclareLaunchArgument(
+                "config", default_value=str(pkg_dir / "examples/standalone.yaml")
+            ),
             Node(
                 package="vesc_can_driver",
                 executable="fake_vesc_node",

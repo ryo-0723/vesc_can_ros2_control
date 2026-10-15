@@ -8,7 +8,7 @@
 
 既存の CAN ドライバ / ros2_control 分割を保持し、模擬 VESC のソースを
 `vesc_can_driver/test/support` へ移動しました。現在の `src` の各ファイルはすべて
-CMake のビルド対象です。[ソースの役割](source-layout.md) と
+CMake のビルド対象です。[ソースの役割](architecture.md) と
 [モータの制御モード](motor-modes.md) を追加しました。
 ドライバ 2 パッケージの maintainer、repository URL、bugtracker URL も設定しました。
 
@@ -172,7 +172,7 @@ Lyrical で全 3 パッケージを再ビルドし、既存の **35 ケースが
 
 関節の位置・速度と VESC の生値を変数名で区別し、単位、STATUS の受信済みフラグと
 受信時刻、CAN の送受信方向を明記しました。変更一覧と C++ 利用者向けの更新点は
-[ソースの構成](source-layout.md#vesc_driver-の構成と関数) に記載しています。
+[ソースの構成](architecture.md#処理の流れ) に記載しています。
 ROS パラメータ、トピック、interface、メッセージ項目名は維持しています。
 
 変更前のコピーと照合し、C++ 16 ファイルの文字列・数値・演算子が同じであることを
@@ -224,7 +224,7 @@ STATUS と指令の受信フラグ・時刻を `std::optional<TimePoint>` にま
 起動設定・テストの 15 ファイルで、`cfg` / `opts` / `cmd` / `pub` / `sub` / `params` に
 命名を揃えました。通常ノードの期限判定には `steady_now`、メッセージの ROS 時刻には
 `stamp` を使っています。公開 C++ メンバの変更点は
-[通信・ROS・起動設定の変数名](source-layout.md#通信ros起動設定の変数名) に記載しています。
+[通信・ROS・起動設定の変数名](architecture.md#設定と状態) に記載しています。
 
 C++ の文字列・数値・演算子と、Python の変数名以外の AST が編集前と同じであることを
 確認しました。`driver_core.hpp/.cpp` と `vesc_protocol.hpp/.cpp` も編集前とバイト単位で一致します。
@@ -650,3 +650,22 @@ colcon test-result は実行単位 5 件を含む **75 tests, 0 errors, 0 failur
 共有ホストで controller_manager に約 29.5 ms の overrun が 1 回あり、周期の保証や実機性能の測定ではありません
 ドライバ単体と hardware plugin のビルド、C++ / Python の書式検査も通過しました
 実 CAN バス・実機・Zenoh pico の性能は未検証です
+
+## 設定例とREADMEの整理
+
+2026-10-15、YAMLとURDFを各パッケージの examples/ にまとめました
+通常ノードは駆動・操舵の基本例と5モードの例、hardware側は対応するURDFとコントローラ設定を残しています
+rox2026固有のYAMLは削除し、論理IDとCAN IDの対応はテスト内の汎用設定で確認します
+ソースの説明は architecture.md に統合し、4つのREADMEを日本語で書き直しました
+
+ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=185で70ケースの成功を確認しました
+最終集計は74 tests、0 errors、0 failures、0 skippedです（ケース70件と実行単位4件）
+始動フレームの検査は、CAN受信を確認してから指令を送るようにしました
+
+- ドライバ単体とhardware pluginを空のビルド先からビルド
+- 移動後の設定例を使って、通常ノード・5モード・ros2_control・再起動の統合テストを実行
+- インストール後の標準launchで、基本例の2台へ指令を送り、通常ノードとros2_controlの両方でフィードバックを確認
+- launchの既定パスがexamples/を指し、旧config/・urdf/がインストールされないことを確認
+- YAML・URDF、文書のローカルリンク・見出し、C++・Pythonの書式を確認
+
+検証は模擬CANで、実機への動作指令は送信していません

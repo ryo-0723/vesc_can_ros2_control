@@ -23,7 +23,7 @@ pluginlib_export_plugin_description_file(hardware_interface vesc_plugins.xml)
 install(TARGETS vesc_hardware EXPORT export_vesc_hardware
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(DIRECTORY include/ DESTINATION include)
-install(DIRECTORY config launch urdf DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY examples launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md "${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE"
   DESTINATION share/${PROJECT_NAME})
 

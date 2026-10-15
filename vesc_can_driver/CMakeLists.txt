@@ -45,7 +45,7 @@ install(TARGETS vesc_can_driver_protocol vesc_can_driver_driver vesc_can_driver_
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(TARGETS vesc_node fake_vesc_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
-install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY examples launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md "${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE"
   DESTINATION share/${PROJECT_NAME})
 

@@ -67,9 +67,11 @@ def generate_launch_description():
                 "controllers",
                 default_value="joint_state_broadcaster drive_controller steer_controller",
             ),
-            DeclareLaunchArgument("urdf", default_value=str(pkg_dir / "urdf/vesc_example.urdf")),
             DeclareLaunchArgument(
-                "controllers_file", default_value=str(pkg_dir / "config/controllers.yaml")
+                "urdf", default_value=str(pkg_dir / "examples/vesc_example.urdf")
+            ),
+            DeclareLaunchArgument(
+                "controllers_file", default_value=str(pkg_dir / "examples/controllers.yaml")
             ),
             OpaqueFunction(function=create_control_nodes),
         ]

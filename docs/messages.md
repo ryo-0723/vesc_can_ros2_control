@@ -25,7 +25,7 @@ CAN と関節状態は既存の標準型を使用します
 ROS 側の数値 ID は `logical_id`、CAN の機器 ID は `controller_id` で管理します
 通常ノードは YAML、ros2_control は URDF の各 joint に両方を指定します
 指令・状態・エラーの motor_id は logical_id に統一し、CAN ID の対応はドライバ内で解決します
-モータ一覧と、モータ名ごとの設定は rox2026 の YAML と同じ形です
+モータ一覧は motors、各モータの設定はその名前の下に記述します
 指令は `command_topic`（既定 `/vesc/commands`）、状態は `state_topic`（既定 `/vesc/state`）を使用します
 通常ノードの状態は VescStateArray で全モータをまとめ、異常だけ `/vesc/event` に即時通知します
 周期の `/diagnostics` は配信しません
@@ -146,7 +146,32 @@ QoS は Reliable / TransientLocal で、登録モータ数分の直近イベン�
 全台停止時は全 ID のイベントを後から取得でき、現在の本体コードは周期の VescState で確認できます
 イベントは履歴であり、復旧完了を表す通知は配信しません
 問い合わせの既定周期は 100 ms、故障応答を受信した処理から即時配信します
-故障コードの応答先 ID・中継フィルタは [CAN 故障問い合わせ](../vesc_can_driver/README.md#即時の異常通知) を参照してください
+故障コードの応答先ID・中継フィルタは [CANの故障問い合わせと再起動](#canの故障問い合わせと再起動) を参照してください
+
+## CANの故障問い合わせと再起動
+
+故障番号は [COMM_GET_VALUES_SELECTIVE](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/commands.c#L358-L453) のbit 15を指定して取得します
+要求と応答はCAN_PACKET_PROCESS_SHORT_BUFFER（8）の拡張フレームです
+応答先はPCの host_can_id（既定254）で、VESCや他の問い合わせ元と重複させません
+
+| 処理 | CAN ID | DLC | 内容 |
+|---|---|---|---|
+| 故障問い合わせ | (8 << 8)とVESCのcontroller_idをOR | 7 | COMM_GET_VALUES_SELECTIVE=50、mask=0x00008000 |
+| 故障応答 | (8 << 8)とPCのhost_can_idをOR | 8 | data[0]にVESCのID、data[7]に故障番号 |
+| 再起動 | (8 << 8)とVESCのcontroller_idをOR | 3 | host_can_id、2、COMM_REBOOT=29 |
+
+host_can_id=254の応答IDは0x8FEです
+IDの組み立ては [公式のcomm_can_send_buffer](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L389-L419) に対応しています
+STATUSだけを通すブリッジには、故障応答の受信フィルタも追加します
+再起動のコマンド番号は [公式のCOMM_REBOOT](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/datatypes.h#L921-L925) です
+既定のhost_can_idなら再起動ペイロードは FE 02 1D になります
+
+fault_poll_period_ms（既定100）はfeedback_timeout_msより短く設定します
+0にすると問い合わせを無効化します
+故障応答がない場合はfault_code=-1とし、必要なSTATUSによる制御を継続します
+現在の取得方法は、各CAN IDが独立したVESCに対応する構成を対象にしています
+VESC 6.06のdual-motor基板は第2モータの応答にも基板の主IDが付くため、対象外です
+CANのis_errorはブリッジからのバス異常で、本体の故障番号とは分けて扱います
 
 ## 再起動サービス
 

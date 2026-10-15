@@ -1,4 +1,5 @@
 <?xml version="1.0"?>
+<!-- 5モードの設定例。controllers_five_modes.yaml と組み合わせる -->
 <robot name="vesc_five_modes">
   <link name="base_link"/>
   <link name="drive_link"/>

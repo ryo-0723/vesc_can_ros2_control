@@ -1,4 +1,5 @@
 <?xml version="1.0"?>
+<!-- 駆動・操舵の基本例。controllers.yaml と組み合わせる -->
 <robot name="vesc_can_example">
   <link name="base_link"/>
   <link name="drive_link"/>

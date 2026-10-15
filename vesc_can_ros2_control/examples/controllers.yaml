@@ -1,3 +1,4 @@
+# vesc_example.urdf と組み合わせる、駆動・操舵のコントローラ設定
 controller_manager:
   ros__parameters:
     update_rate: 100

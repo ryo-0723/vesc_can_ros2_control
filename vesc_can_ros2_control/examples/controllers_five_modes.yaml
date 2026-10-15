@@ -1,3 +1,4 @@
+# vesc_five_modes.urdf と組み合わせる、5モードのコントローラ設定
 controller_manager:
   ros__parameters:
     update_rate: 100

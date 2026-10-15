@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>vesc_can_driver</name>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <description>Native VESC CAN frame encoding and decoding, shared driver, standalone ROS nodes, compact motor commands and fault notifications.</description>
   <maintainer email="tengbenliang742@gmail.com">ryo-0723</maintainer>
   <license>MIT</license>

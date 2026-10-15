@@ -190,7 +190,7 @@ hybrid_joint:
 ```
 
 上記は `ros__parameters` 内の抜粋です。完全な設定は
-[five_modes.yaml](../vesc_can_driver/config/five_modes.yaml) を参照してください。
+[five_modes.yaml](../vesc_can_driver/examples/five_modes.yaml) を参照してください。
 通常ノードの指令は `VescCommandArray.commands` に各モータの指令を入れます
 motor_id は YAML の logical_id で、制御モードは起動時の control_mode から決まります
 配列の stamp は生成時の ROS 時刻で、指令に mode は持たせません
@@ -199,15 +199,15 @@ value に電流 [A]、関節位置 [rad]、関節速度 [rad/s]、duty 比を指
 
 ros2_control では各 joint に `control_mode` param と上表の command interface を
 1 つ記述し、同名の state interface も登録します。
-設定例は [vesc_five_modes.urdf](../vesc_can_ros2_control/urdf/vesc_five_modes.urdf) と
-[controllers_five_modes.yaml](../vesc_can_ros2_control/config/controllers_five_modes.yaml) です。
+設定例は [vesc_five_modes.urdf](../vesc_can_ros2_control/examples/vesc_five_modes.urdf) と
+[controllers_five_modes.yaml](../vesc_can_ros2_control/examples/controllers_five_modes.yaml) です。
 電流の forward controller は `interface_name: current`、電流＋速度は
 `interface_name: velocity`、duty は `interface_name: duty_cycle` を指定します
 
 ```bash
 ros2 launch vesc_can_ros2_control vesc_control.launch.py use_mock:=true \
-  urdf:="$(ros2 pkg prefix --share vesc_can_ros2_control)/urdf/vesc_five_modes.urdf" \
-  controllers_file:="$(ros2 pkg prefix --share vesc_can_ros2_control)/config/controllers_five_modes.yaml" \
+  urdf:="$(ros2 pkg prefix --share vesc_can_ros2_control)/examples/vesc_five_modes.urdf" \
+  controllers_file:="$(ros2 pkg prefix --share vesc_can_ros2_control)/examples/controllers_five_modes.yaml" \
   controllers:="joint_state_broadcaster drive_controller steer_controller current_controller hybrid_controller duty_controller" \
   can_tx_topic:=/bench/can/tx can_rx_topic:=/bench/can/rx
 # 別端末で各指令を周期送信（電流は A、駆動・hybrid は rad/s、操舵は rad、duty は比率）
@@ -226,7 +226,7 @@ ros2 run vesc_can_driver fake_vesc_node --ros-args \
   -p controller_ids:='[11, 21, 12, 31, 41]' \
   -p can_tx_topic:=/bench/can/tx -p can_rx_topic:=/bench/can/rx
 ros2 launch vesc_can_driver vesc_standalone.launch.py \
-  config:="$(ros2 pkg prefix --share vesc_can_driver)/config/five_modes.yaml"
+  config:="$(ros2 pkg prefix --share vesc_can_driver)/examples/five_modes.yaml"
 ```
 
 通常ノードでは次の指令ストリームを起動します

@@ -26,6 +26,32 @@ from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescState, VescStat
 def generate_test_description():
     control_dir = Path(get_package_share_directory("vesc_can_ros2_control"))
     driver_dir = Path(get_package_share_directory("vesc_can_driver"))
+    id_test_params = {
+        "can_tx_topic": "/id_test/can/tx",
+        "can_rx_topic": "/id_test/can/rx",
+        "command_topic": "/id_test/commands",
+        "state_topic": "/id_test/state",
+        "error_topic": "/id_test/event",
+        "motors": ["motor_a", "motor_b", "motor_c"],
+    }
+    for name, motor_id, can_id, mode in (
+        ("motor_a", 10, 51, "current_velocity"),
+        ("motor_b", 11, 52, "current_velocity"),
+        ("motor_c", 12, 50, "velocity"),
+    ):
+        motor_params = {
+            "logical_id": motor_id,
+            "controller_id": can_id,
+            "control_mode": mode,
+            "pole_pairs": 7.0,
+            "max_rpm": 5600.0,
+            "rpm_slew_rate": 2000.0 if mode == "current_velocity" else 5000.0,
+            "startup_current_a": 7.5 if mode == "current_velocity" else 0.0,
+            "rpm_control_threshold_rpm": 800.0 if mode == "current_velocity" else 0.0,
+            "feedback_timeout_ms": 500,
+            "command_timeout_ms": 500,
+        }
+        id_test_params.update({f"{name}.{key}": value for key, value in motor_params.items()})
     return LaunchDescription(
         [
             IncludeLaunchDescription(
@@ -34,8 +60,8 @@ def generate_test_description():
                     "use_mock": "true",
                     "can_tx_topic": "/control_test/can/tx",
                     "can_rx_topic": "/control_test/can/rx",
-                    "urdf": str(control_dir / "urdf/vesc_five_modes.urdf"),
-                    "controllers_file": str(control_dir / "config/controllers_five_modes.yaml"),
+                    "urdf": str(control_dir / "examples/vesc_five_modes.urdf"),
+                    "controllers_file": str(control_dir / "examples/controllers_five_modes.yaml"),
                     "controllers": "joint_state_broadcaster drive_controller steer_controller current_controller hybrid_controller duty_controller",
                 }.items(),
             ),
@@ -52,7 +78,7 @@ def generate_test_description():
                 executable="vesc_node",
                 namespace="topic_test",
                 parameters=[
-                    str(driver_dir / "config/standalone.yaml"),
+                    str(driver_dir / "examples/standalone.yaml"),
                     {
                         "can_tx_topic": "/topic_test/can/tx",
                         "can_rx_topic": "/topic_test/can/rx",
@@ -79,7 +105,7 @@ def generate_test_description():
                 executable="vesc_node",
                 namespace="five_topic",
                 parameters=[
-                    str(driver_dir / "config/five_modes.yaml"),
+                    str(driver_dir / "examples/five_modes.yaml"),
                     {
                         "can_tx_topic": "/five_topic/can/tx",
                         "can_rx_topic": "/five_topic/can/rx",
@@ -102,7 +128,7 @@ def generate_test_description():
                 executable="vesc_node",
                 namespace="event_test",
                 parameters=[
-                    str(driver_dir / "config/standalone.yaml"),
+                    str(driver_dir / "examples/standalone.yaml"),
                     {
                         "can_tx_topic": "/event_test/can/tx",
                         "can_rx_topic": "/event_test/can/rx",
@@ -116,29 +142,20 @@ def generate_test_description():
             Node(
                 package="vesc_can_driver",
                 executable="fake_vesc_node",
-                name="fake_rox_vesc",
+                name="fake_id_vesc",
                 parameters=[
                     {
                         "controller_ids": [51, 52, 50],
-                        "can_tx_topic": "/rox_test/can/tx",
-                        "can_rx_topic": "/rox_test/can/rx",
+                        "can_tx_topic": "/id_test/can/tx",
+                        "can_rx_topic": "/id_test/can/rx",
                     }
                 ],
             ),
             Node(
                 package="vesc_can_driver",
                 executable="vesc_node",
-                namespace="rox_test",
-                parameters=[
-                    str(driver_dir / "config/rox2026.yaml"),
-                    {
-                        "can_tx_topic": "/rox_test/can/tx",
-                        "can_rx_topic": "/rox_test/can/rx",
-                        "command_topic": "/rox_test/commands",
-                        "state_topic": "/rox_test/state",
-                        "error_topic": "/rox_test/event",
-                    },
-                ],
+                namespace="id_test",
+                parameters=[id_test_params],
             ),
             launch_testing.actions.ReadyToTest(),
         ]
@@ -527,6 +544,9 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
         reboot_srv = prefix + "/reboot"
+        stopped = {id: (1, 0) for id in (11, 21, 12, 31, 41)}
+        # Receive CAN traffic before issuing commands so the first startup frame is observed.
+        self.assertTrue(self.wait_for(lambda: self.frames == stopped))
 
         def publish_commands():
             cmd_pub.publish(
@@ -564,7 +584,6 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(
             self.wait_for(lambda: self.frames == mixed, action=publish_changed_commands)
         )
-        stopped = {id: (1, 0) for id in (11, 21, 12, 31, 41)}
 
         def publish_invalid_current():
             cmd_pub.publish(
@@ -720,14 +739,14 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual({event.motor_id for event in retained}, {1, 2})
         self.assertTrue(all("CAN error frame" in event.message for event in retained))
 
-    def test_07_rox2026_yaml_maps_logical_ids_to_can_ids(self):
-        self.node.create_subscription(Frame, "/rox_test/can/tx", self.observe_frame, 100)
+    def test_07_multiple_logical_ids_route_commands_to_can_ids(self):
+        self.node.create_subscription(Frame, "/id_test/can/tx", self.observe_frame, 100)
         self.node.create_subscription(
-            VescStateArray, "/rox_test/state", self.observe_state_array, 10
+            VescStateArray, "/id_test/state", self.observe_state_array, 10
         )
-        cmd_pub = self.node.create_publisher(VescCommandArray, "/rox_test/commands", 10)
+        cmd_pub = self.node.create_publisher(VescCommandArray, "/id_test/commands", 10)
         self.assertTrue(self.wait_for(lambda: cmd_pub.get_subscription_count() > 0))
-        reboot_srv = "/rox_test/vesc_can_ros2_control/reboot"
+        self.assertTrue(self.wait_for(lambda: self.frames == {id: (1, 0) for id in (51, 52, 50)}))
         cmd = VescCommandArray(
             stamp=self.node.get_clock().now().to_msg(),
             commands=[
@@ -751,11 +770,11 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn((52, 1, 7500), self.frame_history)
         response = self.request(
             SetParameters,
-            "/rox_test/vesc_can_ros2_control/set_parameters",
+            "/id_test/vesc_can_ros2_control/set_parameters",
             SetParameters.Request(
                 parameters=[
                     Parameter(
-                        name="upper_belt.control_mode",
+                        name="motor_a.control_mode",
                         value=ParameterValue(
                             type=ParameterType.PARAMETER_STRING, string_value="current"
                         ),
@@ -766,8 +785,8 @@ class IntegrationTest(unittest.TestCase):
         self.assertFalse(response.results[0].successful)
         response = self.request(
             GetParameters,
-            "/rox_test/vesc_can_ros2_control/get_parameters",
-            GetParameters.Request(names=["upper_belt.control_mode"]),
+            "/id_test/vesc_can_ros2_control/get_parameters",
+            GetParameters.Request(names=["motor_a.control_mode"]),
         )
         self.assertEqual(response.values[0].string_value, "current_velocity")
 
@@ -870,9 +889,9 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(self.reboot(reboot_srv, motor_id=2).success)
 
     def test_10_reboot_uses_logical_id_and_never_replays_old_commands(self):
-        self.node.create_subscription(Frame, "/rox_test/can/tx", self.observe_frame, 100)
-        cmd_pub = self.node.create_publisher(VescCommandArray, "/rox_test/commands", 10)
-        service = "/rox_test/vesc_can_ros2_control/reboot"
+        self.node.create_subscription(Frame, "/id_test/can/tx", self.observe_frame, 100)
+        cmd_pub = self.node.create_publisher(VescCommandArray, "/id_test/commands", 10)
+        service = "/id_test/vesc_can_ros2_control/reboot"
         self.assertTrue(self.reboot(service, motor_id=10).success)
         self.reboot_frames.clear()
         cmd = self.make_commands(ids=[10, 11, 12], values=[1.0, 1.0, 1.0])
