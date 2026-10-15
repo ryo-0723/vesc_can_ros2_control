@@ -7,14 +7,14 @@
 
 | 型 | 内容 |
 |---|---|
-| [VescCommand](msg/VescCommand.msg) | motor_idとfloat32の指令値value |
+| [VescCommand](msg/VescCommand.msg) | logical_idとfloat32の指令値value |
 | [VescCommandArray](msg/VescCommandArray.msg) | 生成時刻stampとcommands配列 |
-| [VescState](msg/VescState.msg) | 配信時刻stamp、motor_id、状態値、fault_code |
+| [VescState](msg/VescState.msg) | 配信時刻stamp、logical_id、状態値、fault_code |
 | [VescStateArray](msg/VescStateArray.msg) | 配信時刻stampと全モータのstates配列 |
-| [VescEvent](msg/VescEvent.msg) | motor_idとエラー文字列message |
-| [Reboot](srv/Reboot.srv) | motor_idを指定、successとmessageを返す |
+| [VescEvent](msg/VescEvent.msg) | logical_idとエラー文字列message |
+| [Reboot](srv/Reboot.srv) | logical_idを指定、successとmessageを返す |
 
-motor_idは論理IDです
+logical_idは論理IDです
 通常ノードはYAML、ros2_controlはURDFの `logical_id` に対応し、CAN IDはドライバ内で管理します
 指令値の単位は起動時のモードに従います → [モードと単位](../docs/motor-modes.md)
 
@@ -49,18 +49,18 @@ from vesc_can_msgs.msg import VescCommand, VescCommandArray, VescEvent, VescStat
 
 cmd = VescCommandArray(
     stamp=node.get_clock().now().to_msg(),
-    commands=[VescCommand(motor_id=1, value=1.0)],
+    commands=[VescCommand(logical_id=1, value=1.0)],
 )
 
 
 def on_state(msg: VescStateArray):
     for state in msg.states:
         if math.isfinite(state.position_rad):
-            node.get_logger().info(f"motor_id={state.motor_id}: {state.position_rad} rad")
+            node.get_logger().info(f"logical_id={state.logical_id}: {state.position_rad} rad")
 
 
 def on_event(msg: VescEvent):
-    node.get_logger().error(f"motor_id={msg.motor_id}: {msg.message}")
+    node.get_logger().error(f"logical_id={msg.logical_id}: {msg.message}")
 
 
 command_pub = node.create_publisher(VescCommandArray, "/vesc/commands", 10)

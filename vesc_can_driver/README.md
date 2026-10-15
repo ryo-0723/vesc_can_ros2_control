@@ -16,8 +16,8 @@ ros2_controlを使う場合も、CAN通信と単位変換はこのパッケー�
 
 | 設定 | 意味 |
 |---|---|
-| logical_id | 上位ノードが使うmotor_id、0〜255で一意にする |
-| controller_id | VESC Toolで設定したCAN ID、0〜253で一意にする |
+| logical_id | ROS内のモータ識別子、0〜255で一意にする |
+| motor_id | VESC Toolで設定したCAN ID、0〜253で一意にする |
 | control_mode | velocity / current / position / duty_cycle / current_velocity |
 | pole_pairs | 極対数、14極なら7 |
 | gear_ratio / direction | モータ回転数÷関節回転数、正方向は+1か-1 |
@@ -49,10 +49,10 @@ CANブリッジを共有する場合だけ、両方のYAMLに同じ絶対CANト�
 
 | 名前 | 型 | 用途 |
 |---|---|---|
-| /vesc/commands | vesc_can_msgs/msg/VescCommandArray | motor_idと指令値の配列 |
+| /vesc/commands | vesc_can_msgs/msg/VescCommandArray | logical_idと指令値の配列 |
 | /vesc/state | vesc_can_msgs/msg/VescStateArray | 全モータの状態、既定50 Hz |
-| /vesc/event | vesc_can_msgs/msg/VescEvent | motor_idとエラー文字列 |
-| ~/reboot | vesc_can_msgs/srv/Reboot | 指定したmotor_idのVESCを再起動 |
+| /vesc/event | vesc_can_msgs/msg/VescEvent | logical_idとエラー文字列 |
+| ~/reboot | vesc_can_msgs/srv/Reboot | 指定したlogical_idのVESCを再起動 |
 
 表はnamespaceなしで起動した場合の名前です
 既定のCANトピックは `can/tx` と `can/rx` です
@@ -68,14 +68,14 @@ CAN送信は100 Hzのタイマーで行い、指令トピックの配信周期�
 
 ## 即時の異常通知
 
-VESCの故障は、該当motor_idへ `VESC fault_code=4 (ABS_OVER_CURRENT)` のように通知します
-PC側の全台停止は、影響する各motor_idへ同じ停止理由を通知します
+VESCの故障は、該当logical_idへ `VESC fault_code=4 (ABS_OVER_CURRENT)` のように通知します
+PC側の全台停止は、影響する各logical_idへ同じ停止理由を通知します
 同じ異常の繰り返しを抑え、正常コード0はイベントにしません
 イベントはReliable / TransientLocalで、登録モータ数分の直近通知を保持します
 
 ```bash
 ros2 topic echo /vesc/event vesc_can_msgs/msg/VescEvent --qos-durability transient_local
-ros2 service call /vesc_can_driver/reboot vesc_can_msgs/srv/Reboot '{motor_id: 1}'
+ros2 service call /vesc_can_driver/reboot vesc_can_msgs/srv/Reboot '{logical_id: 1}'
 ```
 
 再起動を受理すると全台の保存指令を破棄し、指定したVESCへ再起動フレームを1回送ります

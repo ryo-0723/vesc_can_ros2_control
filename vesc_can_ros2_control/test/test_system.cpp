@@ -30,7 +30,7 @@ protected:
     hardware_interface::ComponentInfo joint;
     joint.name = "drive_joint";
     joint.type = "joint";
-    joint.parameters = {{"logical_id", "1"}, {"controller_id", "11"}, {"pole_pairs", "7"}};
+    joint.parameters = {{"logical_id", "1"}, {"motor_id", "11"}, {"pole_pairs", "7"}};
     hardware_interface::InterfaceInfo interface;
     interface.name = "velocity";
     joint.command_interfaces.push_back(interface);
@@ -49,7 +49,7 @@ TEST_F(SystemConfigurationTest, PositionDefaultsPreservePiPrecision)
   hardware_interface::ComponentInfo steer_joint;
   steer_joint.name = "steer_joint";
   steer_joint.type = "joint";
-  steer_joint.parameters = {{"logical_id", "2"}, {"controller_id", "21"}, {"pole_pairs", "7"}};
+  steer_joint.parameters = {{"logical_id", "2"}, {"motor_id", "21"}, {"pole_pairs", "7"}};
   hardware_interface::InterfaceInfo pos_interface;
   pos_interface.name = "position";
   steer_joint.command_interfaces.push_back(pos_interface);
@@ -84,7 +84,7 @@ TEST_F(SystemConfigurationTest, RejectsUnsupportedOrAmbiguousCommandInterfaces)
 
 TEST_F(SystemConfigurationTest, RequiresMotorIdentityAndMatchingFeedbackInterface)
 {
-  for (const auto &name : {"logical_id", "controller_id", "pole_pairs"}) {
+  for (const auto &name : {"logical_id", "motor_id", "pole_pairs"}) {
     SCOPED_TRACE(name);
     auto params = make_parameters();
     params.hardware_info.joints[0].parameters.erase(name);
@@ -100,9 +100,9 @@ TEST_F(SystemConfigurationTest, RequiresMotorIdentityAndMatchingFeedbackInterfac
 TEST_F(SystemConfigurationTest, RejectsInvalidNumericMotorSettings)
 {
   for (const auto &[name, value] : {std::pair{"logical_id", "256"}, {"logical_id", "-1"},
-         {"logical_id", "1.5"}, {"controller_id", "255"}, {"controller_id", "1.5"},
-         {"pole_pairs", "0"}, {"pole_pairs", "7.5"}, {"gear_ratio", "0"}, {"direction", "0"},
-         {"max_velocity", "nan"}, {"max_velocity", "20rad"}, {"command_timeout_ms", "0"}}) {
+         {"logical_id", "1.5"}, {"motor_id", "255"}, {"motor_id", "1.5"}, {"pole_pairs", "0"},
+         {"pole_pairs", "7.5"}, {"gear_ratio", "0"}, {"direction", "0"}, {"max_velocity", "nan"},
+         {"max_velocity", "20rad"}, {"command_timeout_ms", "0"}}) {
     SCOPED_TRACE(std::string(name) + "=" + value);
     auto params = make_parameters();
     params.hardware_info.joints[0].parameters[name] = value;
@@ -116,7 +116,7 @@ TEST_F(SystemConfigurationTest, LogicalIdsAreUniqueAndIndependentOfCanIds)
   auto params = make_parameters();
   auto second = params.hardware_info.joints.front();
   second.name = "second_joint";
-  second.parameters["controller_id"] = "12";
+  second.parameters["motor_id"] = "12";
   params.hardware_info.joints.push_back(second);
   VescSystem duplicate_id;
   EXPECT_EQ(duplicate_id.init(params), hardware_interface::CallbackReturn::ERROR);

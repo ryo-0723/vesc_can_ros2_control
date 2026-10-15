@@ -12,13 +12,13 @@ void validate_configs(const std::vector<MotorConfig> &configs)
     throw std::invalid_argument("At least one motor is required");
   }
   std::set<std::string> names;
-  std::set<std::uint8_t> motor_ids;
+  std::set<std::uint8_t> logical_ids;
   std::set<std::uint8_t> ids;
   for (const auto &cfg : configs) {
     MotorController::validate_config(cfg);
-    if (!names.insert(cfg.name).second || !motor_ids.insert(cfg.motor_id).second ||
-        !ids.insert(cfg.controller_id).second) {
-      throw std::invalid_argument("Motor names, logical IDs and controller IDs must be unique");
+    if (!names.insert(cfg.name).second || !logical_ids.insert(cfg.logical_id).second ||
+        !ids.insert(cfg.motor_id).second) {
+      throw std::invalid_argument("Motor names, logical IDs and CAN IDs must be unique");
     }
   }
 }
@@ -38,17 +38,16 @@ bool DriverCore::receive(const VescFeedback &feedback, TimePoint now)
   if (const auto *fault = std::get_if<FaultCode>(&feedback)) {
     return receive_fault(*fault, now);
   }
-  const auto controller_id =
-    std::visit([](const auto &value) { return value.controller_id; }, feedback);
+  const auto motor_id = std::visit([](const auto &value) { return value.motor_id; }, feedback);
   const auto motor = std::find_if(motors_.begin(), motors_.end(),
-    [controller_id](const auto &motor) { return motor.config().controller_id == controller_id; });
+    [motor_id](const auto &motor) { return motor.config().motor_id == motor_id; });
   return motor != motors_.end() && motor->receive(feedback, now);
 }
 
 bool DriverCore::receive_fault(const FaultCode &fault, TimePoint now)
 {
   const auto motor = std::find_if(motors_.begin(), motors_.end(),
-    [&fault](const auto &motor) { return motor.config().controller_id == fault.controller_id; });
+    [&fault](const auto &motor) { return motor.config().motor_id == fault.motor_id; });
   if (motor == motors_.end()) {
     return false;
   }

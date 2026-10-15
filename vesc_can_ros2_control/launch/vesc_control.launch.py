@@ -17,8 +17,8 @@ def create_control_nodes(context):
     mock_params = {
         key: LaunchConfiguration(key).perform(context) for key in ("can_tx_topic", "can_rx_topic")
     }
-    mock_params["controller_ids"] = [
-        int(joint.findtext("./param[@name='controller_id']"))
+    mock_params["motor_ids"] = [
+        int(joint.findtext("./param[@name='motor_id']"))
         for joint in urdf_tree.findall("./ros2_control/joint")
     ]
     return [

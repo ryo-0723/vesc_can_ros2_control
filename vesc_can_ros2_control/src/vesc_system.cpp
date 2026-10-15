@@ -96,21 +96,20 @@ vesc_can_driver::MotorConfig VescSystem::load_joint_config(
   const auto &params = joint.parameters;
   cfg.mode = vesc_can_driver::resolve_control_mode(
     get_string_parameter(params, "control_mode", ""), command_interface);
-  if (params.count("logical_id") == 0 || params.count("controller_id") == 0 ||
+  if (params.count("logical_id") == 0 || params.count("motor_id") == 0 ||
       params.count("pole_pairs") == 0) {
-    throw std::invalid_argument(
-      joint.name + ": logical_id, controller_id and pole_pairs are required");
+    throw std::invalid_argument(joint.name + ": logical_id, motor_id and pole_pairs are required");
   }
-  const int motor_id = get_integer_parameter(params, "logical_id", 0);
-  if (motor_id > 255) {
-    throw std::invalid_argument("Logical motor ID must be in [0, 255]");
+  const int logical_id = get_integer_parameter(params, "logical_id", 0);
+  if (logical_id > 255) {
+    throw std::invalid_argument("logical_id must be in [0, 255]");
+  }
+  cfg.logical_id = static_cast<std::uint8_t>(logical_id);
+  const int motor_id = get_integer_parameter(params, "motor_id", 0);
+  if (motor_id > 253) {
+    throw std::invalid_argument("motor_id must be in [0, 253]");
   }
   cfg.motor_id = static_cast<std::uint8_t>(motor_id);
-  const int controller_id = get_integer_parameter(params, "controller_id", 0);
-  if (controller_id > 254) {
-    throw std::invalid_argument("Controller ID must be in [0, 254]");
-  }
-  cfg.controller_id = static_cast<std::uint8_t>(controller_id);
   cfg.pole_pairs = get_numeric_parameter(params, "pole_pairs", 7.0);
   cfg.gear_ratio = get_numeric_parameter(params, "gear_ratio", 1.0);
   cfg.direction = get_numeric_parameter(params, "direction", 1.0);

@@ -1,5 +1,5 @@
-# Logical motor ID from the standalone driver's YAML
-uint8 motor_id
+# logical_id from the standalone driver's YAML
+uint8 logical_id
 ---
 # True means the reboot request was accepted, not that the VESC has finished booting
 bool success

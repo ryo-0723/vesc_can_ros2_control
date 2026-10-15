@@ -15,8 +15,8 @@
       - steer_joint
 
     drive_joint:
-      logical_id: 1                  # 上位ノードが指令に指定する ID
-      controller_id: 11              # VESC Tool で設定した CAN の機器 ID
+      logical_id: 1  # 上位ノードが指令に指定する ID
+      motor_id: 11   # VESC Tool で設定した CAN の機器 ID
       control_mode: velocity
       pole_pairs: 7.0
       gear_ratio: 1.0
@@ -27,7 +27,7 @@
       require_tachometer: true
     steer_joint:
       logical_id: 2
-      controller_id: 21
+      motor_id: 21
       control_mode: position
       pole_pairs: 7.0
       gear_ratio: 1.0

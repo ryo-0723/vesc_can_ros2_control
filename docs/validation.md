@@ -2,7 +2,7 @@
 
 各節は検証当時の構成を記録しています
 旧 vesc_msgs と上流定義への言及は過去の記録で、現在は独自の vesc_can_msgs に統合しています
-最新結果は末尾の「CAN専用構成への整理」を参照してください
+最新結果は末尾の「logical_idとmotor_idの統一」を参照してください
 
 ## 初回の公開準備 — 2026-10-13
 
@@ -781,3 +781,23 @@ CAN IDの予約範囲は単体側で検査し、指令保存ではロック取�
 ビルドとテストの出力は `/tmp/vesc-can-only-check` に保存しています
 検証は模擬CANです。実機のCANバス・モータは使用していません
 controller_managerの周期超過ログもあるため、測定値は実行周期の保証を示すものではありません
+
+
+## logical_idとmotor_idの統一（2026-10-15）
+
+ROS内で使うIDは `logical_id`、VESC本体に設定する機器IDは `motor_id` に揃えました
+YAML・URDFは `logical_id` と `motor_id` を指定し、旧 `controller_id` は使用しません
+MotorControllerとCANプロトコルの宛先・送信元も `motor_id` としています
+指令・状態・イベントのmsgとRebootの要求は `logical_id` を使います
+既存のmsg・srv利用側はフィールド名を変更し、vesc_can_msgsと合わせて再ビルドが必要です
+
+- ROS 2 Lyrical、`abu2027-tr:robot`、`ROS_DOMAIN_ID=194`
+- ドライバ単独とros2_controlをクリーンビルド、コンパイラ警告なし
+- colcon集計：86件成功、エラー・失敗・スキップなし（実ケース80件＋実行単位6件）
+- 異なる論理IDと機器IDの指令振り分け、状態・故障イベントの識別、再起動の対象を確認
+- 5モード、送信100 Hz、状態50 Hz、複数ノード・hardware componentを確認
+- 設定例、launch、模擬VESC、README、型の説明を更新
+- clang-format、Python構文、YAML・URDFのID対応、git diff --checkを確認
+
+出力は `/tmp/vesc-logical-motor-ids-check` に保存しています
+検証には模擬CANを使い、実機のCANバス・モータは使用していません

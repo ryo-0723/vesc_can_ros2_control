@@ -28,7 +28,7 @@ TEST_F(TransportTest, RejectsInvalidCanConfigurationBeforeStarting)
 {
   MotorConfig cfg;
   cfg.name = "drive";
-  cfg.controller_id = 11;
+  cfg.motor_id = 11;
   auto node = std::make_shared<rclcpp::Node>("config_test_io", "/config_test");
   TransportOptions opts;
   opts.tx_topic = "";
@@ -43,7 +43,7 @@ TEST_F(TransportTest, RejectsInvalidCanConfigurationBeforeStarting)
   opts.fault_period = -1ms;
   EXPECT_THROW(VescTransport({cfg}, opts, node), std::invalid_argument);
   for (const auto id : {254, 255}) {
-    cfg.controller_id = id;
+    cfg.motor_id = id;
     EXPECT_THROW(MotorController{cfg}, std::invalid_argument);
   }
 }
@@ -52,15 +52,15 @@ TEST_F(TransportTest, PendingBatchesUseLatestValuesAndConcurrentUpdatesStayToget
 {
   MotorConfig cfg;
   cfg.name = "first";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
   cfg.feedback_timeout = 2s;
   auto second = cfg;
   second.name = "second";
-  second.motor_id = 2;
-  second.controller_id = 12;
+  second.logical_id = 2;
+  second.motor_id = 12;
   TransportOptions opts;
   opts.tx_topic = "/batch_test/tx";
   opts.rx_topic = "/batch_test/rx";
@@ -148,13 +148,13 @@ TEST_F(TransportTest, InvalidBatchStopsBeforeAnyElementIsCommitted)
   for (const auto &batch : invalid_batches) {
     MotorConfig cfg;
     cfg.name = "first";
-    cfg.motor_id = 1;
-    cfg.controller_id = 11;
+    cfg.logical_id = 1;
+    cfg.motor_id = 11;
     cfg.mode = ControlMode::Current;
     auto second = cfg;
     second.name = "second";
-    second.motor_id = 2;
-    second.controller_id = 12;
+    second.logical_id = 2;
+    second.motor_id = 12;
     TransportOptions opts;
     opts.auto_activate = true;
     auto node = std::make_shared<rclcpp::Node>("invalid_batch_io");
@@ -175,8 +175,8 @@ TEST_F(TransportTest, LatestCommandsTimeoutRecoveryAndIndependentExecutor)
 {
   MotorConfig cfg;
   cfg.name = "drive";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   cfg.command_timeout = 100ms;
   cfg.feedback_timeout = 100ms;
   TransportOptions opts;
@@ -287,8 +287,8 @@ TEST_F(TransportTest, DefaultTimerRepeatsOneCommandAt100Hz)
 {
   MotorConfig cfg;
   cfg.name = "current";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
   cfg.feedback_timeout = 2s;
@@ -351,8 +351,8 @@ TEST_F(TransportTest, FaultCallbackRunsOutsideStateLockWithoutWaitingForSendTime
 {
   MotorConfig cfg;
   cfg.name = "drive";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   cfg.feedback_timeout = 2s;
   TransportOptions opts;
   opts.send_period = 2s;
@@ -426,8 +426,8 @@ TEST_F(TransportTest, SelectivePollingRoutesDeviceFaultsAndNotifiesOnlyCodeChang
 {
   MotorConfig cfg;
   cfg.name = "drive";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   cfg.feedback_timeout = 2s;
   TransportOptions opts;
   opts.tx_topic = "/device_fault_test/tx";
@@ -498,7 +498,7 @@ TEST_F(TransportTest, SelectivePollingRoutesDeviceFaultsAndNotifiesOnlyCodeChang
   {
     std::lock_guard<std::mutex> lock(mutex);
     ASSERT_TRUE(faults[0].device_fault.has_value());
-    EXPECT_EQ(faults[0].device_fault->controller_id, 11);
+    EXPECT_EQ(faults[0].device_fault->motor_id, 11);
     EXPECT_EQ(faults[0].device_fault->code, 4);
   }
   wait_for([]() { return false; }, 250ms);
@@ -523,16 +523,16 @@ TEST_F(TransportTest, RejectsReservedReplyIdAndIgnoresUnrequestedRepliesWhenPoll
 {
   MotorConfig cfg;
   cfg.name = "drive";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   auto peer = std::make_shared<rclcpp::Node>("disabled_fault_peer");
   auto can_node = std::make_shared<rclcpp::Node>("disabled_fault_io");
   TransportOptions opts;
   opts.tx_topic = "/disabled_fault_test/tx";
   opts.rx_topic = "/disabled_fault_test/rx";
-  cfg.controller_id = 254;
+  cfg.motor_id = 254;
   EXPECT_THROW(VescTransport({cfg}, opts, can_node), std::invalid_argument);
-  cfg.controller_id = 11;
+  cfg.motor_id = 11;
   opts.fault_period = -1ms;
   EXPECT_THROW(VescTransport({cfg}, opts, can_node), std::invalid_argument);
   opts.fault_period = 0ms;
@@ -556,15 +556,15 @@ TEST_F(TransportTest, StandaloneStartsOnFreshCommandsAndRebootsOneMotorWithoutRe
 {
   MotorConfig cfg;
   cfg.name = "drive";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
   cfg.feedback_timeout = 100ms;
   auto second = cfg;
   second.name = "other";
-  second.motor_id = 2;
-  second.controller_id = 12;
+  second.logical_id = 2;
+  second.motor_id = 12;
   TransportOptions opts;
   opts.tx_topic = "/auto_reboot_test/tx";
   opts.rx_topic = "/auto_reboot_test/rx";

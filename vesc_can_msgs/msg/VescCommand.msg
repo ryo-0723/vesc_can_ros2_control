@@ -1,5 +1,5 @@
-# ROS logical_id from YAML, independent of the VESC CAN controller_id
-uint8 motor_id
+# ROS motor identifier from YAML, independent of the VESC motor_id
+uint8 logical_id
 
 # Unit follows this motor's startup control_mode:
 #   current: motor current [A], signed in the joint direction

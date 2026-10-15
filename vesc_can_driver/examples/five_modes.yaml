@@ -19,7 +19,7 @@
 
     drive_joint:
       logical_id: 1
-      controller_id: 11
+      motor_id: 11
       control_mode: velocity
       pole_pairs: 7.0
       max_rpm: 190.0
@@ -28,7 +28,7 @@
       command_timeout_ms: 300
     steer_joint:
       logical_id: 2
-      controller_id: 21
+      motor_id: 21
       control_mode: position
       pole_pairs: 7.0
       min_position: -1.0
@@ -37,7 +37,7 @@
       command_timeout_ms: 300
     current_joint:
       logical_id: 3
-      controller_id: 12
+      motor_id: 12
       control_mode: current
       pole_pairs: 7.0
       direction: -1.0
@@ -46,7 +46,7 @@
       command_timeout_ms: 300
     hybrid_joint:
       logical_id: 4
-      controller_id: 31
+      motor_id: 31
       control_mode: current_velocity
       pole_pairs: 7.0
       max_rpm: 190.0
@@ -60,7 +60,7 @@
 
     duty_joint:
       logical_id: 5
-      controller_id: 41
+      motor_id: 41
       control_mode: duty_cycle
       pole_pairs: 7.0
       direction: -1.0

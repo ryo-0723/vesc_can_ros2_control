@@ -20,7 +20,7 @@ void fill_state(const MotorConfig &cfg, const MotorState &state, TimePoint now,
   const bool status_4_fresh = feedback_fresh(state.status4_at, now, timeout);
   const bool status_5_fresh = feedback_fresh(state.status5_at, now, timeout);
 
-  msg.motor_id = cfg.motor_id;
+  msg.logical_id = cfg.logical_id;
   msg.velocity_rad_s = status_1_fresh ? state.vel_rad_s : kUnknownValue;
   msg.motor_current_a = static_cast<float>(status_1_fresh ? state.motor_current_a : kUnknownValue);
   msg.duty_cycle = static_cast<float>(status_1_fresh ? state.duty_cycle : kUnknownValue);
@@ -94,10 +94,10 @@ void MotorStatePublisher::publish_error(const DriverFault &fault)
   vesc_can_msgs::msg::VescEvent msg;
   msg.message = event_message(fault);
   for (const auto &cfg : configs_) {
-    if (fault.device_fault && fault.device_fault->controller_id != cfg.controller_id) {
+    if (fault.device_fault && fault.device_fault->motor_id != cfg.motor_id) {
       continue;
     }
-    msg.motor_id = cfg.motor_id;
+    msg.logical_id = cfg.logical_id;
     error_pub_->publish(msg);
   }
 }
@@ -156,16 +156,16 @@ MotorConfig VescNode::load_motor_config(const std::string &motor_name)
   const auto prefix = motor_name + ".";
   MotorConfig cfg;
   cfg.name = motor_name;
-  const auto motor_id = declare_parameter<std::int64_t>(prefix + "logical_id", -1);
-  if (motor_id < 0 || motor_id > 255 || motor_idx_[motor_id] >= 0) {
-    throw std::invalid_argument(motor_name + ": logical ID must be unique and in [0, 255]");
+  const auto logical_id = declare_parameter<std::int64_t>(prefix + "logical_id", -1);
+  if (logical_id < 0 || logical_id > 255 || motor_idx_[logical_id] >= 0) {
+    throw std::invalid_argument(motor_name + ": logical_id must be unique and in [0, 255]");
+  }
+  cfg.logical_id = static_cast<std::uint8_t>(logical_id);
+  const auto motor_id = declare_parameter<std::int64_t>(prefix + "motor_id", -1);
+  if (motor_id < 0 || motor_id > 253) {
+    throw std::invalid_argument(motor_name + ": motor_id must be in [0, 253]");
   }
   cfg.motor_id = static_cast<std::uint8_t>(motor_id);
-  const auto controller_id = declare_parameter<std::int64_t>(prefix + "controller_id", -1);
-  if (controller_id < 0 || controller_id > 254) {
-    throw std::invalid_argument(motor_name + ": controller ID must be in [0, 254]");
-  }
-  cfg.controller_id = static_cast<std::uint8_t>(controller_id);
 
   rcl_interfaces::msg::ParameterDescriptor fixed_mode;
   fixed_mode.read_only = true;
@@ -201,7 +201,7 @@ MotorConfig VescNode::load_motor_config(const std::string &motor_name)
   cfg.command_timeout =
     std::chrono::milliseconds(declare_parameter<std::int64_t>(prefix + "command_timeout_ms", 500));
   cfg.require_tachometer = declare_parameter<bool>(prefix + "require_tachometer", false);
-  motor_idx_[motor_id] = static_cast<int>(configs_.size());
+  motor_idx_[logical_id] = static_cast<int>(configs_.size());
   return cfg;
 }
 
@@ -226,10 +226,10 @@ void VescNode::initialize_command_interfaces()
 
   reboot_srv_ = create_service<Reboot>(
     "~/reboot", [this](Reboot::Request::SharedPtr request, Reboot::Response::SharedPtr response) {
-      const auto motor_idx = motor_idx_[request->motor_id];
+      const auto motor_idx = motor_idx_[request->logical_id];
       if (motor_idx < 0) {
         response->success = false;
-        response->message = "Unknown logical motor ID: " + std::to_string(request->motor_id);
+        response->message = "Unknown logical_id: " + std::to_string(request->logical_id);
         return;
       }
       const auto idx = static_cast<std::size_t>(motor_idx);
@@ -256,9 +256,9 @@ void VescNode::command_callback(const VescCommandArray &msg)
 {
   cmds_.clear();
   for (const auto &cmd : msg.commands) {
-    const auto motor_idx = motor_idx_[cmd.motor_id];
+    const auto motor_idx = motor_idx_[cmd.logical_id];
     if (motor_idx < 0) {
-      transport_->stop_on_error("Unknown logical motor ID: " + std::to_string(cmd.motor_id));
+      transport_->stop_on_error("Unknown logical_id: " + std::to_string(cmd.logical_id));
       return;
     }
     cmds_.push_back({static_cast<std::size_t>(motor_idx), cmd.value});

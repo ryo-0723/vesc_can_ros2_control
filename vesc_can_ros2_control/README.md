@@ -30,8 +30,8 @@ ros2 launch vesc_can_ros2_control vesc_control.launch.py \
 
 | 設定 | 意味 |
 |---|---|
-| logical_id | 状態・エラーのmotor_id、0〜255で一意にする、必須 |
-| controller_id | VESCのCAN ID、0〜253で一意にする、必須 |
+| logical_id | ROS内のモータ識別子、0〜255で一意にする、必須 |
+| motor_id | VESCのCAN ID、0〜253で一意にする、必須 |
 | pole_pairs | 極対数、正整数、必須 |
 | gear_ratio / direction | モータ回転数÷関節回転数、正方向は+1か-1 |
 | control_mode | velocity / current / position / duty_cycle / current_velocity |
@@ -51,7 +51,7 @@ ros2 launch vesc_can_ros2_control vesc_control.launch.py \
 ```xml
 <joint name="drive_joint">
   <param name="logical_id">1</param>
-  <param name="controller_id">11</param>
+  <param name="motor_id">11</param>
   <param name="pole_pairs">7</param>
   <command_interface name="velocity"/>
   <state_interface name="position"/>
@@ -77,16 +77,16 @@ VESCの再起動後は、オドメトリ側の前回値を取り直してくだ�
 オドメトリのcontrollerはstate interfaceを直接読めます
 状態のトピックは `/<System名>_can_io/motors/<joint名>/state` です
 controller_managerにnamespaceを指定した場合は、その配下に作られます
-複数のSystemは名前を分け、共有CANバス上のcontroller_idを重複させないようにします
+複数のSystemは名前を分け、共有CANバス上のmotor_idを重複させないようにします
 例では `/VescCanSystem_can_io/motors/drive_joint/state` になります
-`VescState` のmotor_idはURDFのlogical_idに対応します → [型と単位](../docs/messages.md)
+`VescState` のlogical_idはURDFのlogical_idに対応します → [型と単位](../docs/messages.md)
 
 state interfaceと内部計算はdoubleです
 `current` と `duty_cycle` interfaceは関節方向の符号を使い、VescStateの同じ値はVESCの符号を使います
 
 ## 異常時の動作
 
-異常時は全台にゼロ電流を送り、`/vesc/event` にmotor_idと理由を通知します
+異常時は全台にゼロ電流を送り、`/vesc/event` にlogical_idと理由を通知します
 停止の保持はcontroller_managerのhardware lifecycleで復旧します
 `read()` / `write()` はROSの配信を行わず、CAN用のexecutorが通信と通知を担当します
 

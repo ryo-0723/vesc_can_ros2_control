@@ -47,11 +47,10 @@ public:
   /// @brief 模擬モータ・CAN 指令受付・STATUS 配信タイマーを作成する
   FakeVescNode() : rclcpp::Node("fake_vesc")
   {
-    const auto controller_ids =
-      declare_parameter<std::vector<std::int64_t>>("controller_ids", {11, 21});
+    const auto motor_ids = declare_parameter<std::vector<std::int64_t>>("motor_ids", {11, 21});
     pole_pairs_ = declare_parameter<double>("pole_pairs", 7.0);
     declare_parameter<bool>("publish_feedback", true);
-    declare_parameter<std::int64_t>("fault_controller_id", -1);
+    declare_parameter<std::int64_t>("fault_motor_id", -1);
     declare_parameter<std::int64_t>("fault_code", 0);
     const auto feedback_period =
       std::chrono::milliseconds(declare_parameter<std::int64_t>("period_ms", 20));
@@ -61,17 +60,17 @@ public:
         watchdog_timeout_.count() <= 0) {
       throw std::invalid_argument("Invalid fake VESC settings");
     }
-    for (const auto controller_id : controller_ids) {
-      if (controller_id < 0 || controller_id >= protocol::kBroadcastControllerId) {
-        throw std::invalid_argument("Invalid fake controller ID");
+    for (const auto motor_id : motor_ids) {
+      if (motor_id < 0 || motor_id >= protocol::kBroadcastMotorId) {
+        throw std::invalid_argument("Invalid fake CAN ID");
       }
       const auto duplicate_motor = std::find_if(motors_.begin(), motors_.end(),
-        [controller_id](const FakeMotor &motor) { return motor.controller_id == controller_id; });
+        [motor_id](const FakeMotor &motor) { return motor.motor_id == motor_id; });
       if (duplicate_motor != motors_.end()) {
         throw std::invalid_argument("Duplicate ID");
       }
       FakeMotor motor;
-      motor.controller_id = static_cast<std::uint8_t>(controller_id);
+      motor.motor_id = static_cast<std::uint8_t>(motor_id);
       motor.cmd_at = SteadyClock::now();
       motors_.push_back(motor);
     }
@@ -89,7 +88,7 @@ public:
 private:
   struct FakeMotor
   {
-    std::uint8_t controller_id{};
+    std::uint8_t motor_id{};
     double electrical_rpm{};
     double pos_rad{};
     double motor_current_a{};
@@ -105,23 +104,21 @@ private:
         frame.id > protocol::kExtendedCanIdMask) {
       return;
     }
-    const auto controller_id = frame.id & protocol::kControllerIdMask;
-    const auto motor_it =
-      std::find_if(motors_.begin(), motors_.end(), [controller_id](const FakeMotor &candidate) {
-        return candidate.controller_id == controller_id;
-      });
+    const auto motor_id = frame.id & protocol::kMotorIdMask;
+    const auto motor_it = std::find_if(motors_.begin(), motors_.end(),
+      [motor_id](const FakeMotor &candidate) { return candidate.motor_id == motor_id; });
     if (motor_it == motors_.end()) {
       return;
     }
     const auto packet_id = frame.id >> protocol::kPacketIdShift;
     if (packet_id == protocol::kProcessShortBufferId && frame.dlc == 3 && frame.data[1] == 2 &&
         frame.data[2] == protocol::kCommRebootId) {
-      const auto id = motor_it->controller_id;
+      const auto id = motor_it->motor_id;
       *motor_it = FakeMotor{};
-      motor_it->controller_id = id;
+      motor_it->motor_id = id;
       motor_it->cmd_at = SteadyClock::now();
       motor_it->boot_until = motor_it->cmd_at + std::chrono::milliseconds(200);
-      if (get_parameter("fault_controller_id").as_int() == id) {
+      if (get_parameter("fault_motor_id").as_int() == id) {
         set_parameter(rclcpp::Parameter("fault_code", std::int64_t{0}));
       }
       return;
@@ -135,7 +132,7 @@ private:
       if (!get_parameter("publish_feedback").as_bool()) {
         return;
       }
-      const auto fault_id = get_parameter("fault_controller_id").as_int();
+      const auto fault_id = get_parameter("fault_motor_id").as_int();
       const auto code = get_parameter("fault_code").as_int();
       if (code < 0 || code > 255) {
         return;
@@ -145,8 +142,8 @@ private:
       reply.id = (protocol::kProcessShortBufferId << 8) | frame.data[0];
       reply.is_extended = true;
       reply.dlc = 8;
-      reply.data = {motor_it->controller_id, 1, protocol::kGetValuesSelectiveId, 0, 0, 0x80, 0,
-        static_cast<std::uint8_t>(fault_id == motor_it->controller_id ? code : 0)};
+      reply.data = {motor_it->motor_id, 1, protocol::kGetValuesSelectiveId, 0, 0, 0x80, 0,
+        static_cast<std::uint8_t>(fault_id == motor_it->motor_id ? code : 0)};
       feedback_pub_->publish(reply);
       return;  // Reading fault_code does not refresh the command watchdog.
     }
@@ -187,7 +184,7 @@ private:
   {
     can_msgs::msg::Frame frame;
     frame.header.stamp = now();
-    frame.id = (packet_id << protocol::kPacketIdShift) | motor.controller_id;
+    frame.id = (packet_id << protocol::kPacketIdShift) | motor.motor_id;
     frame.is_extended = true;
     frame.dlc = 8;
     return frame;

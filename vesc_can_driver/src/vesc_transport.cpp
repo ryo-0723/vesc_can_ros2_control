@@ -263,7 +263,7 @@ void VescTransport::send_commands()
     const auto now = SteadyClock::now();
     if (reboot_idx_) {
       const auto idx = *reboot_idx_;
-      const auto id = core_.motors()[idx].config().controller_id;
+      const auto id = core_.motors()[idx].config().motor_id;
       reboot_command = protocol::make_reboot_frame(id);
       fault_requests_[id].reset();
       core_.reset(idx);
@@ -327,7 +327,7 @@ void VescTransport::poll_faults()
     if (now < rx_after_[idx]) {
       continue;
     }
-    const auto id = core_.motors()[idx].config().controller_id;
+    const auto id = core_.motors()[idx].config().motor_id;
     fault_requests_[id] = SteadyClock::now();
     send_frame(protocol::make_fault_request(id));
   }
@@ -344,7 +344,7 @@ void VescTransport::receive_frame(const can_msgs::msg::Frame &frame)
     return;
   }
   if (const auto *fault = std::get_if<FaultCode>(&*feedback)) {
-    auto &requested_at = fault_requests_[fault->controller_id];
+    auto &requested_at = fault_requests_[fault->motor_id];
     if (!feedback_fresh(requested_at, SteadyClock::now(), opts_.fault_period)) {
       return;
     }
@@ -362,15 +362,14 @@ void VescTransport::send_frame(can_msgs::msg::Frame frame)
 void VescTransport::receive_feedback(const VescFeedback &feedback)
 {
   const auto now = SteadyClock::now();
-  const auto controller_id =
-    std::visit([](const auto &value) { return value.controller_id; }, feedback);
+  const auto motor_id = std::visit([](const auto &value) { return value.motor_id; }, feedback);
   const auto *device_fault = std::get_if<FaultCode>(&feedback);
   std::optional<DriverFault> event;
   {
     std::lock_guard<std::mutex> state_lock(state_mutex_);
     const auto &motors = core_.motors();
     const auto motor = std::find_if(motors.begin(), motors.end(),
-      [controller_id](const auto &motor) { return motor.config().controller_id == controller_id; });
+      [motor_id](const auto &motor) { return motor.config().motor_id == motor_id; });
     if (motor == motors.end()) {
       return;
     }
@@ -420,7 +419,7 @@ void VescTransport::send_outputs()
   for (auto command : outputs_) {
     if (stop_requested_.load()) {
       command = protocol::comm_can_set_current(
-        static_cast<std::uint8_t>(command.id & protocol::kControllerIdMask), 0.0);
+        static_cast<std::uint8_t>(command.id & protocol::kMotorIdMask), 0.0);
     }
     send_frame(command);
   }

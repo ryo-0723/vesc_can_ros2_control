@@ -13,38 +13,38 @@ namespace vesc_can_driver
 namespace
 {
 using namespace std::chrono_literals;
-MotorConfig make_motor_config(std::uint8_t controller_id = 11)
+MotorConfig make_motor_config(std::uint8_t motor_id = 11)
 {
   MotorConfig cfg;
-  cfg.name = "motor" + std::to_string(controller_id);
-  cfg.motor_id = controller_id;
-  cfg.controller_id = controller_id;
+  cfg.name = "motor" + std::to_string(motor_id);
+  cfg.logical_id = motor_id;
+  cfg.motor_id = motor_id;
   cfg.command_timeout = 100ms;
   cfg.feedback_timeout = 200ms;
   return cfg;
 }
-can_msgs::msg::Frame make_status_1_frame(std::uint8_t controller_id = 11)
+can_msgs::msg::Frame make_status_1_frame(std::uint8_t motor_id = 11)
 {
   can_msgs::msg::Frame frame;
-  frame.id = (9u << 8) | controller_id;
+  frame.id = (9u << 8) | motor_id;
   frame.is_extended = true;
   frame.dlc = 8;
   frame.data = {0, 0, 1, 164, 0, 15, 1, 244};
   return frame;  // 420 ERPM, 1.5 A, 0.5 duty
 }
-can_msgs::msg::Frame make_status_4_frame(std::uint8_t controller_id = 21)
+can_msgs::msg::Frame make_status_4_frame(std::uint8_t motor_id = 21)
 {
   can_msgs::msg::Frame frame;
-  frame.id = (16u << 8) | controller_id;
+  frame.id = (16u << 8) | motor_id;
   frame.is_extended = true;
   frame.dlc = 8;
   frame.data = {1, 44, 1, 54, 0, 0, 17, 148};
   return frame;  // 30 C, 31 C, 90 degrees
 }
-can_msgs::msg::Frame make_status_5_frame(std::uint8_t controller_id = 11)
+can_msgs::msg::Frame make_status_5_frame(std::uint8_t motor_id = 11)
 {
   can_msgs::msg::Frame frame;
-  frame.id = (27u << 8) | controller_id;
+  frame.id = (27u << 8) | motor_id;
   frame.is_extended = true;
   frame.dlc = 8;
   frame.data = {255, 255, 255, 214, 0, 240, 0, 0};
@@ -54,10 +54,10 @@ can_msgs::msg::Frame make_status_5_frame(std::uint8_t controller_id = 11)
 template <typename Status, auto Decode> bool decode_status_frame(const can_msgs::msg::Frame &frame)
 {
   Status status;
-  status.controller_id = 77;
+  status.motor_id = 77;
   const bool decoded = Decode(frame, status);
   if (!decoded) {
-    EXPECT_EQ(status.controller_id, 77);  // Rejected frames must not update the output.
+    EXPECT_EQ(status.motor_id, 77);  // Rejected frames must not update the output.
   }
   return decoded;
 }
@@ -122,7 +122,7 @@ TEST(Protocol, FaultQueryMatchesVesc6SelectiveShortBufferWireFormat)
   reply.data = {11, 1, 50, 0, 0, 128, 0, 4};
   protocol::FaultCode fault;
   ASSERT_TRUE(protocol::decode_fault_reply(reply, fault));
-  EXPECT_EQ(fault.controller_id, 11);
+  EXPECT_EQ(fault.motor_id, 11);
   EXPECT_EQ(fault.code, 4);
   for (std::uint8_t code : {0, 255}) {
     reply.data[7] = code;
@@ -183,7 +183,7 @@ TEST(Protocol, FaultReplyRejectsWrongAddressMaskCommandAndFrameFormat)
   const auto reject = [](const can_msgs::msg::Frame &frame) {
     protocol::FaultCode fault{77, 88};
     EXPECT_FALSE(protocol::decode_fault_reply(frame, fault));
-    EXPECT_EQ(fault.controller_id, 77);
+    EXPECT_EQ(fault.motor_id, 77);
     EXPECT_EQ(fault.code, 88);
   };
   for (auto id : {0x8FDu, 0x8FFu}) {
@@ -388,21 +388,21 @@ TEST(Protocol, Vesc6Signed32StatusFieldsKeepTheirUnitsAndBoundaries)
   frame.data = {0x7F, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0};
   protocol::Status1 status_1;
   ASSERT_TRUE(protocol::decode_status_1(frame, status_1));
-  EXPECT_EQ(status_1.controller_id, 37);
+  EXPECT_EQ(status_1.motor_id, 37);
   EXPECT_EQ(status_1.electrical_rpm, std::numeric_limits<std::int32_t>::max());
 
   frame.data = {0x80, 0, 0, 0, 0x7F, 0xFF, 0xFF, 0xFF};
   frame.id = (14u << 8) | 37u;
   protocol::Status2 status_2;
   ASSERT_TRUE(protocol::decode_status_2(frame, status_2));
-  EXPECT_EQ(status_2.controller_id, 37);
+  EXPECT_EQ(status_2.motor_id, 37);
   EXPECT_DOUBLE_EQ(status_2.charge_drawn_ah, -214748.3648);
   EXPECT_DOUBLE_EQ(status_2.charge_regen_ah, 214748.3647);
 
   frame.id = (15u << 8) | 37u;
   protocol::Status3 status_3;
   ASSERT_TRUE(protocol::decode_status_3(frame, status_3));
-  EXPECT_EQ(status_3.controller_id, 37);
+  EXPECT_EQ(status_3.motor_id, 37);
   EXPECT_DOUBLE_EQ(status_3.energy_drawn_wh, -214748.3648);
   EXPECT_DOUBLE_EQ(status_3.energy_regen_wh, 214748.3647);
 
@@ -410,7 +410,7 @@ TEST(Protocol, Vesc6Signed32StatusFieldsKeepTheirUnitsAndBoundaries)
   frame.data = {0x80, 0, 0, 0, 0xFF, 0x85, 0xA5, 0x5A};
   protocol::Status5 status_5;
   ASSERT_TRUE(protocol::decode_status_5(frame, status_5));
-  EXPECT_EQ(status_5.controller_id, 37);
+  EXPECT_EQ(status_5.motor_id, 37);
   EXPECT_EQ(status_5.tachometer_counts, std::numeric_limits<std::int32_t>::min());
   EXPECT_DOUBLE_EQ(status_5.input_voltage_v, -12.3);
 }
@@ -422,7 +422,7 @@ TEST(Protocol, Vesc6Signed16StatusFieldsKeepTheirOrderAndScale)
   frame.data = {0x80, 0, 0x7F, 0xFF, 0xFF, 0x85, 0xEE, 0x6C};
   protocol::Status4 status_4;
   ASSERT_TRUE(protocol::decode_status_4(frame, status_4));
-  EXPECT_EQ(status_4.controller_id, 37);
+  EXPECT_EQ(status_4.motor_id, 37);
   EXPECT_DOUBLE_EQ(status_4.temperature_fet_c, -3276.8);
   EXPECT_DOUBLE_EQ(status_4.temperature_motor_c, 3276.7);
   EXPECT_DOUBLE_EQ(status_4.input_current_a, -12.3);
@@ -432,7 +432,7 @@ TEST(Protocol, Vesc6Signed16StatusFieldsKeepTheirOrderAndScale)
   frame.data = {0xFC, 0x18, 0x7F, 0xFF, 0x80, 0, 0xFE, 0x0C};
   protocol::Status6 status_6;
   ASSERT_TRUE(protocol::decode_status_6(frame, status_6));
-  EXPECT_EQ(status_6.controller_id, 37);
+  EXPECT_EQ(status_6.motor_id, 37);
   EXPECT_DOUBLE_EQ(status_6.adc_1_v, -1.0);
   EXPECT_DOUBLE_EQ(status_6.adc_2_v, 32.767);
   EXPECT_DOUBLE_EQ(status_6.adc_3_v, -32.768);
@@ -753,7 +753,7 @@ TEST(MotorController, OwnsItsConfigurationStateAndCommandIndependently)
   cfg.mode = ControlMode::Current;
   cfg.direction = -1.0;
   MotorController first(cfg);
-  cfg.controller_id = 12;
+  cfg.motor_id = 12;
   cfg.name = "second";
   cfg.direction = 1.0;
   MotorController second(cfg);
@@ -765,7 +765,7 @@ TEST(MotorController, OwnsItsConfigurationStateAndCommandIndependently)
   ASSERT_TRUE(second.set_command(2.0, now));
   EXPECT_EQ(motor_frame(first, now).frame.data, protocol::comm_can_set_current(11, -1.5).data);
   EXPECT_EQ(motor_frame(second, now).frame.data, protocol::comm_can_set_current(12, 2.0).data);
-  EXPECT_EQ(first.config().controller_id, 11);
+  EXPECT_EQ(first.config().motor_id, 11);
   EXPECT_EQ(first.config().name, "motor11");
   first.reset();
   EXPECT_FALSE(first.state().status1_at.has_value());
@@ -1149,7 +1149,7 @@ TEST(MotorSafety, IndependentMotorChecksAndLatchesTimeoutAndInvalidCommand)
 {
   MotorConfig cfg;
   cfg.name = "single";
-  cfg.controller_id = 11;
+  cfg.motor_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 100ms;
   const auto now = TimePoint(1s);
@@ -1172,7 +1172,7 @@ TEST(MotorSafety, FreshFeedbackAndHealthyReplyCannotReplayAFaultedCommand)
 {
   MotorConfig cfg;
   cfg.name = "single";
-  cfg.controller_id = 11;
+  cfg.motor_id = 11;
   cfg.mode = ControlMode::Current;
   cfg.command_timeout = 2s;
   cfg.feedback_timeout = 100ms;

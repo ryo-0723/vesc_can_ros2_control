@@ -34,14 +34,14 @@ def generate_test_description():
         "error_topic": "/id_test/event",
         "motors": ["motor_a", "motor_b", "motor_c"],
     }
-    for name, motor_id, can_id, mode in (
+    for name, logical_id, motor_id, mode in (
         ("motor_a", 10, 51, "current_velocity"),
         ("motor_b", 11, 52, "current_velocity"),
         ("motor_c", 12, 50, "velocity"),
     ):
         motor_params = {
-            "logical_id": motor_id,
-            "controller_id": can_id,
+            "logical_id": logical_id,
+            "motor_id": motor_id,
             "control_mode": mode,
             "pole_pairs": 7.0,
             "max_rpm": 5600.0,
@@ -94,7 +94,7 @@ def generate_test_description():
                 name="fake_five_vesc",
                 parameters=[
                     {
-                        "controller_ids": [11, 21, 12, 31, 41],
+                        "motor_ids": [11, 21, 12, 31, 41],
                         "can_tx_topic": "/five_topic/can/tx",
                         "can_rx_topic": "/five_topic/can/rx",
                     }
@@ -145,7 +145,7 @@ def generate_test_description():
                 name="fake_id_vesc",
                 parameters=[
                     {
-                        "controller_ids": [51, 52, 50],
+                        "motor_ids": [51, 52, 50],
                         "can_tx_topic": "/id_test/can/tx",
                         "can_rx_topic": "/id_test/can/rx",
                     }
@@ -190,7 +190,7 @@ class IntegrationTest(unittest.TestCase):
     def make_commands(self, ids, values, stamp=None):
         return VescCommandArray(
             stamp=self.node.get_clock().now().to_msg() if stamp is None else stamp,
-            commands=[VescCommand(motor_id=id, value=value) for id, value in zip(ids, values)],
+            commands=[VescCommand(logical_id=id, value=value) for id, value in zip(ids, values)],
         )
 
     def observe_frame(self, msg):
@@ -211,12 +211,12 @@ class IntegrationTest(unittest.TestCase):
 
     def observe_vesc_state(self, msg):
         self.assertGreater(msg.stamp.sec, 0)
-        self.vesc_states[msg.motor_id] = msg
-        self.vesc_times.setdefault(msg.motor_id, []).append(time.monotonic())
+        self.vesc_states[msg.logical_id] = msg
+        self.vesc_times.setdefault(msg.logical_id, []).append(time.monotonic())
 
     def observe_state_array(self, msg):
         self.assertGreater(msg.stamp.sec, 0)
-        self.assertEqual(len({state.motor_id for state in msg.states}), len(msg.states))
+        self.assertEqual(len({state.logical_id for state in msg.states}), len(msg.states))
         for state in msg.states:
             self.assertEqual(state.stamp, msg.stamp)
             self.observe_vesc_state(state)
@@ -265,8 +265,8 @@ class IntegrationTest(unittest.TestCase):
         self.node.destroy_client(client)
         return response
 
-    def reboot(self, service, motor_id=1):
-        response = self.request(Reboot, service, Reboot.Request(motor_id=motor_id))
+    def reboot(self, service, logical_id=1):
+        response = self.request(Reboot, service, Reboot.Request(logical_id=logical_id))
         if response.success:
             self.wait_for(lambda: False, timeout=0.7)  # Receive guard is 500 ms
         return response
@@ -366,7 +366,7 @@ class IntegrationTest(unittest.TestCase):
         self.measure_rates(publish_control_commands)
         for cid, id in ((11, 1), (21, 2), (12, 3), (31, 4), (41, 5)):
             self.assert_rate(self.frame_times[cid], 100, f"CAN ID {cid}")
-            self.assert_rate(self.vesc_times[id], 50, f"VescState motor_id {id}")
+            self.assert_rate(self.vesc_times[id], 50, f"VescState logical_id {id}")
         self.assert_rate(self.joint_times, 50, "JointState")
 
         def drive_position():
@@ -429,7 +429,7 @@ class IntegrationTest(unittest.TestCase):
             "Feedback loss must release all five modes",
         )
         self.assertTrue(
-            self.wait_for(lambda: {event.motor_id for event in events} == {1, 2, 3, 4, 5})
+            self.wait_for(lambda: {event.logical_id for event in events} == {1, 2, 3, 4, 5})
         )
         self.assertTrue(all(event.message for event in events))
         self.assertTrue(
@@ -476,7 +476,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(drive_state.fault_code, 0)
         self.assertTrue(math.isfinite(drive_state.position_rad))
         self.assertAlmostEqual(drive_state.velocity_rad_s, 2.0, delta=0.02)
-        self.assertEqual([state.motor_id for state in self.state_array.states], [1, 2])
+        self.assertEqual([state.logical_id for state in self.state_array.states], [1, 2])
         self.assertEqual(self.node.count_publishers(prefix + "/motors/drive_joint/state"), 0)
         self.assertFalse(
             any(
@@ -487,7 +487,7 @@ class IntegrationTest(unittest.TestCase):
         self.measure_rates(publish_motor_commands)
         for cid, id in ((11, 1), (21, 2)):
             self.assert_rate(self.frame_times[cid], 100, f"CAN ID {cid}")
-            self.assert_rate(self.vesc_times[id], 50, f"VescState motor_id {id}")
+            self.assert_rate(self.vesc_times[id], 50, f"VescState logical_id {id}")
         self.assert_rate(self.array_times, 50, "VescStateArray (all motors)")
 
         def publish_changed_commands():
@@ -617,12 +617,12 @@ class IntegrationTest(unittest.TestCase):
 
         stopped = {id: (1, 0) for id in (11, 21, 12, 31, 41)}
         for invalid in (
-            VescCommandArray(commands=[VescCommand(motor_id=11, value=1.0)]),
+            VescCommandArray(commands=[VescCommand(logical_id=11, value=1.0)]),
             self.make_commands(ids=[1, 1], values=[1.0, 2.0]),
-            VescCommandArray(commands=[VescCommand(motor_id=1, value=math.inf)]),
-            VescCommandArray(commands=[VescCommand(motor_id=2, value=2.0)]),
-            VescCommandArray(commands=[VescCommand(motor_id=3, value=4.0)]),
-            VescCommandArray(commands=[VescCommand(motor_id=5, value=0.75)]),
+            VescCommandArray(commands=[VescCommand(logical_id=1, value=math.inf)]),
+            VescCommandArray(commands=[VescCommand(logical_id=2, value=2.0)]),
+            VescCommandArray(commands=[VescCommand(logical_id=3, value=4.0)]),
+            VescCommandArray(commands=[VescCommand(logical_id=5, value=0.75)]),
         ):
             with self.subTest(commands=invalid.commands):
                 self.assertTrue(self.reboot(reboot_srv).success)
@@ -705,7 +705,7 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertTrue(self.wait_for(lambda: len(states) > 0, timeout=3.0))
         started = time.monotonic()
-        invalid = VescCommandArray(commands=[VescCommand(motor_id=1, value=math.nan)])
+        invalid = VescCommandArray(commands=[VescCommand(logical_id=1, value=math.nan)])
         self.assertTrue(
             self.wait_for(
                 lambda: len(events) == 2, timeout=0.5, action=lambda: cmd_pub.publish(invalid)
@@ -714,7 +714,7 @@ class IntegrationTest(unittest.TestCase):
         elapsed = time.monotonic() - started
         print(f"Command error event: {elapsed * 1000:.1f} ms (state period 2000 ms)", flush=True)
         self.assertLess(elapsed, 0.5)
-        self.assertEqual({event.motor_id for event in events}, {1, 2})
+        self.assertEqual({event.logical_id for event in events}, {1, 2})
         self.assertTrue(all("invalid command value" in event.message for event in events))
         self.wait_for(lambda: False, timeout=0.1, action=lambda: cmd_pub.publish(invalid))
         self.assertEqual(len(events), 2)
@@ -736,10 +736,10 @@ class IntegrationTest(unittest.TestCase):
         qos = QoSProfile(depth=2, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.node.create_subscription(VescEvent, "/event_test/event", retained.append, qos)
         self.assertTrue(self.wait_for(lambda: len(retained) == 2, timeout=0.5))
-        self.assertEqual({event.motor_id for event in retained}, {1, 2})
+        self.assertEqual({event.logical_id for event in retained}, {1, 2})
         self.assertTrue(all("CAN error frame" in event.message for event in retained))
 
-    def test_07_multiple_logical_ids_route_commands_to_can_ids(self):
+    def test_07_multiple_logical_ids_route_commands_to_motor_ids(self):
         self.node.create_subscription(Frame, "/id_test/can/tx", self.observe_frame, 100)
         self.node.create_subscription(
             VescStateArray, "/id_test/state", self.observe_state_array, 10
@@ -750,9 +750,9 @@ class IntegrationTest(unittest.TestCase):
         cmd = VescCommandArray(
             stamp=self.node.get_clock().now().to_msg(),
             commands=[
-                VescCommand(motor_id=12, value=2.0),
-                VescCommand(motor_id=10, value=2.0),
-                VescCommand(motor_id=11, value=2.0),
+                VescCommand(logical_id=12, value=2.0),
+                VescCommand(logical_id=10, value=2.0),
+                VescCommand(logical_id=11, value=2.0),
             ],
         )
         self.assertTrue(
@@ -844,7 +844,7 @@ class IntegrationTest(unittest.TestCase):
             SetParameters.Request(
                 parameters=[
                     Parameter(
-                        name="fault_controller_id",
+                        name="fault_motor_id",
                         value=ParameterValue(
                             type=ParameterType.PARAMETER_INTEGER, integer_value=21
                         ),
@@ -864,7 +864,7 @@ class IntegrationTest(unittest.TestCase):
             "(state period 2000 ms, fault query period 100 ms)",
             flush=True,
         )
-        self.assertEqual(events[0].motor_id, 2)  # Logical ID, despite physical CAN ID 21.
+        self.assertEqual(events[0].logical_id, 2)  # Logical ID, despite physical CAN ID 21.
         self.assertEqual(events[0].message, "VESC fault_code=4 (ABS_OVER_CURRENT)")
         self.assertTrue(self.wait_for(lambda: self.frames == {11: (1, 0), 21: (1, 0)}, action=send))
         self.assertTrue(self.wait_for(lambda: self.vesc_states[2].fault_code == 4, timeout=3.0))
@@ -886,13 +886,13 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(response.results[0].successful)
         self.assertTrue(self.wait_for(lambda: self.vesc_states[2].fault_code == 0, timeout=3.0))
         self.assertEqual(self.frames, {11: (1, 0), 21: (1, 0)})
-        self.assertTrue(self.reboot(reboot_srv, motor_id=2).success)
+        self.assertTrue(self.reboot(reboot_srv, logical_id=2).success)
 
     def test_10_reboot_uses_logical_id_and_never_replays_old_commands(self):
         self.node.create_subscription(Frame, "/id_test/can/tx", self.observe_frame, 100)
         cmd_pub = self.node.create_publisher(VescCommandArray, "/id_test/commands", 10)
         service = "/id_test/vesc_can_driver/reboot"
-        self.assertTrue(self.reboot(service, motor_id=10).success)
+        self.assertTrue(self.reboot(service, logical_id=10).success)
         self.reboot_frames.clear()
         cmd = self.make_commands(ids=[10, 11, 12], values=[1.0, 1.0, 1.0])
         self.assertTrue(
@@ -901,10 +901,10 @@ class IntegrationTest(unittest.TestCase):
                 action=lambda: cmd_pub.publish(cmd),
             )
         )
-        response = self.request(Reboot, service, Reboot.Request(motor_id=51))
+        response = self.request(Reboot, service, Reboot.Request(logical_id=51))
         self.assertFalse(response.success)  # CAN ID is not the ROS logical ID
         self.assertEqual(self.reboot_frames, [])
-        response = self.request(Reboot, service, Reboot.Request(motor_id=11))
+        response = self.request(Reboot, service, Reboot.Request(logical_id=11))
         self.assertTrue(response.success)
         self.assertTrue(self.wait_for(lambda: self.reboot_frames == [52], timeout=1.0))
         self.assertTrue(self.wait_for(lambda: self.frames == {id: (1, 0) for id in (50, 51, 52)}))

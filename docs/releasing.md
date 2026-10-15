@@ -23,7 +23,7 @@ GitHub へのソース公開と、ROS apt で配布するためのリリース�
    maintainer は `ryo-0723 <tengbenliang742@gmail.com>` に設定済み
    初期コードの出典はルート README に記録している
 3. README、設定例、CHANGELOG、バージョン、依存関係を整え、GitHub 上で CI を通す
-   通常ノードの /vesc/state は VescStateArray に変更し、各要素の motor_id と変換済みの速度・角度を使う
+   通常ノードの /vesc/state は VescStateArray に変更し、各要素の logical_id と変換済みの速度・角度を使う
    /vesc/event は VescEvent に変更し、hardware URDF の各 joint に logical_id を追加する
    VescState / VescStateArray / VescEvent の定義に合わせ、購読側の再ビルドを案内する
 4. source release/tag と release repository を用意し、対象 distro の bloom / rosdistro 手続きを行う

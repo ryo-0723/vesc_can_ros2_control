@@ -41,8 +41,8 @@ bool is_velocity_mode(ControlMode mode);
 struct MotorConfig
 {
   std::string name;
-  std::uint8_t motor_id{};  // ROS logical ID, independent of device addressing
-  std::uint8_t controller_id{};
+  std::uint8_t logical_id{};  // ROS logical ID, independent of device addressing
+  std::uint8_t motor_id{};
   ControlMode mode{ControlMode::Velocity};
   double pole_pairs{7.0};
   double gear_ratio{1.0};  // motor revolutions / joint revolution

@@ -38,7 +38,7 @@ protected:
       .use_global_arguments(false)
       .arguments({"--ros-args", "-r", "__ns:=" + ns, "-r", "__node:=" + name})
       .parameter_overrides({rclcpp::Parameter("motors", std::vector<std::string>{"motor"}),
-        rclcpp::Parameter("motor.logical_id", 1), rclcpp::Parameter("motor.controller_id", 11),
+        rclcpp::Parameter("motor.logical_id", 1), rclcpp::Parameter("motor.motor_id", 11),
         rclcpp::Parameter("motor.control_mode", "current"),
         rclcpp::Parameter("motor.feedback_timeout_ms", 2000),
         rclcpp::Parameter("motor.command_timeout_ms", 2000),
@@ -77,7 +77,7 @@ TEST_F(NodeTest, NamespacesIsolateCommandsFeedbackErrorsAndShutdownInOneProcess)
     states.push_back(observer->create_subscription<States>(
       ns + "/vesc/state", 10, [&, idx](States::ConstSharedPtr msg) {
         ++state_count[idx];
-        if (msg->states.size() == 1 && msg->states[0].motor_id == 1 &&
+        if (msg->states.size() == 1 && msg->states[0].logical_id == 1 &&
             std::abs(msg->states[0].velocity_rad_s - erpm_to_vel(MotorConfig{}, 100 * (idx + 1))) <
               1e-9) {
           feedback_seen[idx] = true;
@@ -85,8 +85,8 @@ TEST_F(NodeTest, NamespacesIsolateCommandsFeedbackErrorsAndShutdownInOneProcess)
       }));
     events.push_back(observer->create_subscription<Event>(ns + "/vesc/event",
       rclcpp::QoS(1).reliable().transient_local(), [&, idx](Event::ConstSharedPtr msg) {
-        EXPECT_EQ(msg->motor_id, 1);
-        EXPECT_NE(msg->message.find("Unknown logical motor ID"), std::string::npos);
+        EXPECT_EQ(msg->logical_id, 1);
+        EXPECT_NE(msg->message.find("Unknown logical_id"), std::string::npos);
         ++event_count[idx];
       }));
   }
@@ -119,14 +119,14 @@ TEST_F(NodeTest, NamespacesIsolateCommandsFeedbackErrorsAndShutdownInOneProcess)
   for (std::size_t idx = 0; idx < 2; ++idx) {
     Commands msg;
     vesc_can_msgs::msg::VescCommand cmd;
-    cmd.motor_id = 1;
+    cmd.logical_id = 1;
     cmd.value = idx + 1.0;
     msg.commands.push_back(cmd);
     commands[idx]->publish(msg);
   }
   ASSERT_TRUE(wait_for([&]() { return command_seen[0] && command_seen[1]; }));
   Commands invalid;
-  invalid.commands.emplace_back().motor_id = 2;
+  invalid.commands.emplace_back().logical_id = 2;
   commands[0]->publish(invalid);
   ASSERT_TRUE(wait_for([&]() { return event_count[0] == 1; }));
   EXPECT_EQ(event_count[1], 0);

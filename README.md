@@ -43,7 +43,7 @@ ros2 launch vesc_can_driver vesc_standalone.launch.py use_mock:=true
 
 ```bash
 ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
-  '{stamp: now, commands: [{motor_id: 1, value: 1.0}, {motor_id: 2, value: 0.25}]}'
+  '{stamp: now, commands: [{logical_id: 1, value: 1.0}, {logical_id: 2, value: 0.25}]}'
 ros2 topic echo /vesc/state
 ```
 
@@ -55,7 +55,7 @@ CANの送受信には `can_msgs/msg/Frame` を使います
 ## ros2_controlで使う
 
 こちらを使うときは、通常ノードを起動しません
-URDFの各jointに、論理IDの `logical_id` とCAN IDの `controller_id` を指定します
+URDFの各jointに、論理IDの `logical_id` とCAN IDの `motor_id` を指定します
 
 ```bash
 ros2 launch vesc_can_ros2_control vesc_control.launch.py use_mock:=true \
@@ -88,7 +88,7 @@ ros2 topic pub -r 20 /steer_controller/commands std_msgs/msg/Float64MultiArray '
 ## 状態とエラー
 
 通常ノードの `/vesc/state` は全モータをまとめた `VescStateArray` です
-指令・状態・エラーは、同じ論理 `motor_id` で識別します
+指令・状態・エラーは、同じ論理 `logical_id` で識別します
 速度は `velocity_rad_s`、積算角は `position_rad`、PID角は `pid_pos_rad` です
 速度・角度はfloat64、電流・温度・電圧などの監視値はfloat32で、欠測値はNaNにします
 
@@ -99,7 +99,7 @@ ros2 topic pub -r 20 /steer_controller/commands std_msgs/msg/Float64MultiArray '
 | ros2_controlのstate interface | 100 Hz |
 | joint_state_broadcasterのJointState | 50 Hz |
 
-異常は `/vesc/event` の `VescEvent`（motor_id、message）に通知します
+異常は `/vesc/event` の `VescEvent`（logical_id、message）に通知します
 VESCの故障コードは100 msごとに問い合わせ、応答を受けた処理から通知します
 異常時は全台にゼロ電流を送り、停止を保持します
 通常ノードは `~/reboot`、ros2_controlはhardware lifecycleの復旧操作を使います → [型と単位の説明](docs/messages.md)

@@ -10,11 +10,11 @@
 |---|---|---|
 | CAN 境界 | can_msgs/msg/Frame | 元の CAN ID、フラグ、DLC、ペイロードを保持 |
 | モータ指令（通常ノード） | vesc_can_msgs/msg/VescCommandArray | 生成時刻と論理 ID・float32 指令値の配列、単位は A / 関節 rad / rad/s / duty 比 |
-| VESC 状態（通常ノード） | vesc_can_msgs/msg/VescStateArray | /vesc/state、各要素の motor_id は指令と同じ論理 ID |
-| VESC 状態（ros2_control） | vesc_can_msgs/msg/VescState | モータ別のトピック、motor_id は URDF の logical_id |
-| VESC 再起動（通常ノード） | vesc_can_msgs/srv/Reboot | motor_id は論理 ID、対応する 1 台を再起動 |
+| VESC 状態（通常ノード） | vesc_can_msgs/msg/VescStateArray | /vesc/state、各要素の logical_id は指令と同じ論理 ID |
+| VESC 状態（ros2_control） | vesc_can_msgs/msg/VescState | モータ別のトピック、logical_id は URDF の logical_id |
+| VESC 再起動（通常ノード） | vesc_can_msgs/srv/Reboot | logical_id は論理 ID、対応する 1 台を再起動 |
 | 関節状態（ros2_control） | sensor_msgs/msg/JointState | joint_state_broadcaster が state interface から配信 |
-| 即時の異常通知 | vesc_can_msgs/msg/VescEvent | /vesc/event に motor_id とエラー文字列を配信 |
+| 即時の異常通知 | vesc_can_msgs/msg/VescEvent | /vesc/event に logical_id とエラー文字列を配信 |
 
 CAN と関節状態は既存の標準型を使用します
 独自の IMU 型や、VescState を包む Stamped 型はありません
@@ -22,9 +22,12 @@ CAN と関節状態は既存の標準型を使用します
 ## 通常ノードのモータ識別と指令
 
 1 つの通常ノードが `motors` に登録した全台を管理します
-ROS 側の数値 ID は `logical_id`、CAN の機器 ID は `controller_id` で管理します
+ROS 側の数値 ID は `logical_id`、CAN の機器 ID は `motor_id` で管理します
+YAML・URDFの物理IDは旧 `controller_id` から `motor_id` へ変更してください
+msg・srvのROS内IDは旧 `motor_id` から `logical_id` へ変更しています
+C++の設定・デコード結果でもVESC本体のIDは `motor_id` です
 通常ノードは YAML、ros2_control は URDF の各 joint に両方を指定します
-指令・状態・エラーの motor_id は logical_id に統一し、CAN ID の対応はドライバ内で解決します
+指令・状態・エラーは共通の `logical_id` を使い、`motor_id` との対応はドライバ内で解決します
 モータ一覧は motors、各モータの設定はその名前の下に記述します
 指令は `command_topic`（既定 `/vesc/commands`）、状態は `state_topic`（既定 `/vesc/state`）を使用します
 通常ノードの状態は VescStateArray で全モータをまとめ、異常だけ `/vesc/event` に即時通知します
@@ -32,7 +35,7 @@ ROS 側の数値 ID は `logical_id`、CAN の機器 ID は `controller_id` で�
 
 ```text
 # VescCommand
-uint8 motor_id
+uint8 logical_id
 float32 value
 
 # VescCommandArray
@@ -44,7 +47,7 @@ builtin_interfaces/Time stamp
 VescState[] states
 ```
 
-motor_id は設定の logical_id に対応し、0〜255 の範囲で重複させません
+logical_id は設定の logical_id に対応し、0〜255 の範囲で重複させません
 モードは YAML の control_mode で起動時に固定し、指令に mode は持たせません
 通常ノードは control_mode / command_interface パラメータの起動後の変更も拒否します
 value は電流 [A]、関節速度 [rad/s]、関節位置 [rad]、duty 比のいずれかです
@@ -67,7 +70,7 @@ CAN レイアウトは [VESC firmware 6.06 の送信処理](https://github.com/v
 | 取得元 | VescState のフィールド | 配信する値 |
 |---|---|---|
 | ROS | stamp | 配信時刻 |
-| 設定 | motor_id | 論理 ID、0〜255、指令・エラーと共通 |
+| 設定 | logical_id | 論理 ID、0〜255、指令・エラーと共通 |
 | STATUS1 | velocity_rad_s / motor_current_a / duty_cycle | 関節速度 [rad/s]、モータ電流 [A]、duty |
 | STATUS2 | charge_drawn_ah / charge_regen_ah | 積算電荷 [Ah] |
 | STATUS3 | energy_drawn_wh / energy_regen_wh | 積算電力量 [Wh] |
@@ -123,7 +126,7 @@ STATUS2/3/6 が未受信でも、モードに必要なフィードバックが�
 このドライバが取得せず常に欠測値だったため削除しました
 未使用の frame_id と、VescStateStamped の包みも廃止しました
 公開メッセージの erpm・tachometer_counts・tachometer_fresh・motor_name・controller_id は削除しました
-速度と角度は関節単位、識別は motor_id にまとめ、PID 角度も pid_pos_deg から pid_pos_rad に変更しました
+速度と角度は関節単位、識別は logical_id にまとめ、PID 角度も pid_pos_deg から pid_pos_rad に変更しました
 生の ERPM・タコメータ・CAN ID・名前は内部のプロトコル処理と設定に残しています
 
 ## 異常イベント
@@ -132,12 +135,12 @@ STATUS2/3/6 が未受信でも、モードに必要なフィードバックが�
 型は次の 2 項目だけです
 
 ```text
-uint8 motor_id
+uint8 logical_id
 string message
 ```
 
 不正指令・CAN エラーフレームはコールバック、期限切れは CAN 周期で検出した直後に配信します
-本体の異常は該当 motor_id へ `VESC fault_code=4 (ABS_OVER_CURRENT)` のような文字列を通知します
+本体の異常は該当 logical_id へ `VESC fault_code=4 (ABS_OVER_CURRENT)` のような文字列を通知します
 故障名は [VESC 6.06 の公式 enum](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/datatypes.h#L132-L163) に対応し、未知のコードは数値と UNKNOWN を表示します
 PC 側の異常は影響する全モータへ ID ごとに同じ停止理由を通知します
 正常コード 0 はイベントを配信しません
@@ -154,13 +157,13 @@ QoS は Reliable / TransientLocal で、登録モータ数分の直近イベン�
 要求と応答はCAN_PACKET_PROCESS_SHORT_BUFFER（8）の拡張フレームです
 応答先は内部定数 kReplyCanId=254 に固定し、YAML・URDFでのホストID設定は不要です
 通常ノードとhardware pluginではモータにCAN ID 0〜253を使い、254は応答先に予約します
-通常の電流・速度・位置・duty指令は、宛先のcontroller_idだけで送信できます
+通常の電流・速度・位置・duty指令は、宛先のmotor_idだけで送信できます
 
 | 処理 | CAN ID | DLC | 内容 |
 |---|---|---|---|
-| 故障問い合わせ | (8 << 8)とVESCのcontroller_idをOR | 7 | COMM_GET_VALUES_SELECTIVE=50、mask=0x00008000 |
+| 故障問い合わせ | (8 << 8)とVESCのmotor_idをOR | 7 | COMM_GET_VALUES_SELECTIVE=50、mask=0x00008000 |
 | 故障応答 | (8 << 8)と254をOR | 8 | data[0]にVESCのID、data[7]に故障番号 |
-| 再起動 | (8 << 8)とVESCのcontroller_idをOR | 3 | 254、2、COMM_REBOOT=29 |
+| 再起動 | (8 << 8)とVESCのmotor_idをOR | 3 | 254、2、COMM_REBOOT=29 |
 
 故障応答のCAN IDは0x8FEです
 IDの組み立ては [公式のcomm_can_send_buffer](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L389-L419) に対応しています
@@ -180,13 +183,13 @@ CANのis_errorはブリッジからのバス異常で、本体の故障番号と
 通常ノードの ~/reboot は vesc_can_msgs/srv/Reboot です
 
 ```text
-uint8 motor_id
+uint8 logical_id
 ---
 bool success
 string message
 ```
 
-motor_id は指令と同じ YAML の logical_id です
+logical_id は指令と同じ YAML の logical_id です
 success は要求の受理を表し、本体の再起動完了の確認ではありません
 対応する CAN ID へ COMM_REBOOT を 1 回送り、保存した指令は全台分を破棄します
 対象の受信状態をクリアし、500 ms 後の新鮮な状態と新しい指令から再開します
@@ -219,14 +222,14 @@ Status1〜Status6 の構造体、宣言、関数定義をこの順序に揃え�
 ## 購読側の変更
 
 通常ノードの状態購読は /vesc/state の vesc_can_msgs/msg/VescStateArray に変更します
-states[] の各要素を指令と同じ motor_id で識別します
+states[] の各要素を指令と同じ logical_id で識別します
 hardware のモータ別トピックは vesc_can_msgs/msg/VescState を使用します
 旧型の互換エイリアスはありません
 
 | 旧アクセス | 新アクセス |
 |---|---|
 | msg.header.stamp | msg.stamp |
-| msg.state.controller_id / msg.controller_id / msg.motor_name | msg.motor_id、設定の logical_id に合わせる |
+| msg.state.controller_id / msg.controller_id / msg.motor_name | msg.logical_id、設定の logical_id に合わせる |
 | msg.state.speed / msg.erpm | msg.velocity_rad_s、関節 rad/s に変換済み |
 | msg.state.current_motor / current_input | msg.motor_current_a / input_current_a |
 | msg.state.temp_fet / temp_motor | msg.temp_fet_c / temp_motor_c |
@@ -241,7 +244,8 @@ vesc_can_msgs と購読側を同じ定義で再ビルドし、/vesc/event の購
 通常ノード名はvesc_can_driverで、再起動サービスは /vesc_can_driver/reboot です
 ros2_control の URDF には全 joint に一意の logical_id を追加します
 通常ノードと同じモータなら YAML と URDF の logical_id を揃えます
-通常ノードの指令、再起動サービス、CAN の形式、ros2_control の state / command interface は維持します
+指令と再起動サービスは `logical_id` で対象を指定します
+CANの形式とros2_controlのstate / command interfaceは同じです
 通常ノードは VescStateArray を周期配信し、異常を検出したときだけ /vesc/event に通知します
 
 ## C++ヘッダの変更
@@ -269,7 +273,7 @@ MotorControllerの `command()` はCANフレームと検査結果を返し、Driv
 受信には `can_protocol.hpp` でデコードしたVescFeedbackを渡します
 旧VescInterface・CanInterfaceと、内部用VescCommand・CanOptionsは廃止しました
 CMakeの `vesc_can_driver::can` は削除し、CAN通信管理には `vesc_can_driver::transport` を使います
-ROSのmsg、トピック名、YAML・URDFのパラメータ名は同じです
+IDの名称変更は冒頭の「通常ノードのモータ識別と指令」を参照してください
 
 ## C++ファイル名の整理
 

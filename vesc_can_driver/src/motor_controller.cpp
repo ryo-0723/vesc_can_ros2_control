@@ -99,7 +99,7 @@ double apply_direction(const MotorConfig &cfg, double value)
 void MotorController::validate_config(const MotorConfig &cfg)
 {
   command_interface(cfg.mode);  // Reject invalid enum values as well.
-  if (cfg.name.empty() || cfg.controller_id >= protocol::kReplyCanId) {
+  if (cfg.name.empty() || cfg.motor_id >= protocol::kReplyCanId) {
     throw std::invalid_argument("Motor name is required and CAN ID must be in [0, 253]");
   }
   const std::array numeric_settings = {cfg.pole_pairs, cfg.gear_ratio, cfg.direction,
@@ -199,7 +199,7 @@ bool MotorController::receive(const VescFeedback &feedback, TimePoint now)
   return std::visit(
     [&](const auto &value) {
       using Value = std::decay_t<decltype(value)>;
-      if (value.controller_id != config_.controller_id) {
+      if (value.motor_id != config_.motor_id) {
         return false;
       }
       auto &state = state_;
@@ -249,7 +249,7 @@ bool MotorController::receive(const VescFeedback &feedback, TimePoint now)
 
 bool MotorController::receive_fault(const FaultCode &fault, TimePoint now)
 {
-  if (fault.controller_id != config_.controller_id) {
+  if (fault.motor_id != config_.motor_id) {
     return false;
   }
   state_.fault_code = fault.code;
@@ -314,7 +314,7 @@ std::string_view MotorController::command_error(TimePoint now) const
 
 can_msgs::msg::Frame MotorController::stop_command() const
 {
-  return protocol::comm_can_set_current(config_.controller_id, 0.0);
+  return protocol::comm_can_set_current(config_.motor_id, 0.0);
 }
 
 MotorController::CommandResult MotorController::command(TimePoint now)
@@ -336,12 +336,11 @@ MotorController::CommandResult MotorController::command(TimePoint now)
   }
   switch (cfg.mode) {
     case ControlMode::Current:
-      return {
-        protocol::comm_can_set_current(cfg.controller_id, apply_direction(cfg, cmd.target)), {}};
+      return {protocol::comm_can_set_current(cfg.motor_id, apply_direction(cfg, cmd.target)), {}};
     case ControlMode::DutyCycle:
-      return {protocol::comm_can_set_duty(cfg.controller_id, apply_direction(cfg, cmd.target)), {}};
+      return {protocol::comm_can_set_duty(cfg.motor_id, apply_direction(cfg, cmd.target)), {}};
     case ControlMode::Position:
-      return {protocol::comm_can_set_pos(cfg.controller_id, pos_to_deg(cfg, cmd.target)), {}};
+      return {protocol::comm_can_set_pos(cfg.motor_id, pos_to_deg(cfg, cmd.target)), {}};
     case ControlMode::CurrentVelocity: {
       const auto &state = state_;
       const double rpm_per_vel = cfg.gear_ratio * 60.0 / (2.0 * kPi);
@@ -359,7 +358,7 @@ MotorController::CommandResult MotorController::command(TimePoint now)
           cmd_ = Command{};
           return {stop_command(), fault_reason_};
         }
-        return {protocol::comm_can_set_current(cfg.controller_id,
+        return {protocol::comm_can_set_current(cfg.motor_id,
                   apply_direction(cfg, std::copysign(cfg.startup_current_a, cmd.target))),
           {}};
       }
@@ -373,7 +372,7 @@ MotorController::CommandResult MotorController::command(TimePoint now)
       cmd.ramp_vel += std::clamp(cmd.target - cmd.ramp_vel, -max_step, max_step);
       const auto electrical_rpm =
         static_cast<std::int32_t>(std::llround(vel_to_erpm(cfg, cmd.ramp_vel)));
-      return {protocol::comm_can_set_rpm(cfg.controller_id, electrical_rpm), {}};
+      return {protocol::comm_can_set_rpm(cfg.motor_id, electrical_rpm), {}};
     }
   }
   fault_reason_ = "unsupported control mode";

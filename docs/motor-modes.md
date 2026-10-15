@@ -115,7 +115,7 @@ joint_rad = remainder(feedback_deg × π / 180 - zero_offset_rad, 2π)
 ```text
 CAN duty ratio = command × direction
 payload        = round(CAN duty ratio × 100000)
-CAN ID         = (0 << 8) | controller_id
+CAN ID         = (0 << 8) | motor_id
 ```
 
 [公式 VESC 6.06 の comm_can_set_duty](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L469-L475) の ID・倍率・符号付き int32 形式を使用します
@@ -151,7 +151,7 @@ control_mode と command_interface は読み取り専用で、起動後の変更
 ```yaml
 drive_joint:
   logical_id: 1
-  controller_id: 11
+  motor_id: 11
   control_mode: velocity
   pole_pairs: 7.0
   gear_ratio: 1.0
@@ -159,7 +159,7 @@ drive_joint:
   rpm_slew_rate: 955.0
 steer_joint:
   logical_id: 2
-  controller_id: 21
+  motor_id: 21
   control_mode: position
   pole_pairs: 7.0
   gear_ratio: 1.0
@@ -167,20 +167,20 @@ steer_joint:
   max_position: 1.0
 current_joint:
   logical_id: 3
-  controller_id: 12
+  motor_id: 12
   control_mode: current
   pole_pairs: 7.0
   max_current_a: 3.0
 duty_joint:
   logical_id: 5
-  controller_id: 41
+  motor_id: 41
   control_mode: duty_cycle
   pole_pairs: 7.0
   direction: -1.0
   max_duty: 0.5
 hybrid_joint:
   logical_id: 4
-  controller_id: 31
+  motor_id: 31
   control_mode: current_velocity
   pole_pairs: 7.0
   max_current_a: 3.0
@@ -192,7 +192,7 @@ hybrid_joint:
 上記は `ros__parameters` 内の抜粋です。完全な設定は
 [five_modes.yaml](../vesc_can_driver/examples/five_modes.yaml) を参照してください。
 通常ノードの指令は `VescCommandArray.commands` に各モータの指令を入れます
-motor_id は YAML の logical_id で、制御モードは起動時の control_mode から決まります
+logical_id は YAML の logical_id で、制御モードは起動時の control_mode から決まります
 配列の stamp は生成時の ROS 時刻で、指令に mode は持たせません
 value に電流 [A]、関節位置 [rad]、関節速度 [rad/s]、duty 比を指定します
 上位ノードに CAN ID の対応表を持たせる必要はありません
@@ -223,7 +223,7 @@ ros2 topic pub -r 20 /duty_controller/commands std_msgs/msg/Float64MultiArray '{
 
 ```bash
 ros2 run vesc_can_driver fake_vesc_node --ros-args \
-  -p controller_ids:='[11, 21, 12, 31, 41]' \
+  -p motor_ids:='[11, 21, 12, 31, 41]' \
   -p can_tx_topic:=/bench/can/tx -p can_rx_topic:=/bench/can/rx
 ros2 launch vesc_can_driver vesc_standalone.launch.py \
   config:="$(ros2 pkg prefix --share vesc_can_driver)/examples/five_modes.yaml"
@@ -234,7 +234,7 @@ ros2 launch vesc_can_driver vesc_standalone.launch.py \
 
 ```bash
 ros2 topic pub -r 20 /vesc/commands vesc_can_msgs/msg/VescCommandArray \
-  '{stamp: now, commands: [{motor_id: 1, value: 2.0}, {motor_id: 2, value: 0.25}, {motor_id: 3, value: 1.5}, {motor_id: 4, value: 2.0}, {motor_id: 5, value: 0.25}]}'
+  '{stamp: now, commands: [{logical_id: 1, value: 2.0}, {logical_id: 2, value: 0.25}, {logical_id: 3, value: 1.5}, {logical_id: 4, value: 2.0}, {logical_id: 5, value: 0.25}]}'
 ```
 
 全モータへ command_timeout_ms 内に新しい指令を送り続けます
@@ -267,7 +267,7 @@ plugin は activate 時にフィードバックを待ち、電流・速度・dut
 同じドライバ内の全台へ `SET_CURRENT(0 A)` を送ります。
 位置モードも異常停止時は位置保持を解除します。
 異常は保持され、フィードバックや指令が再開しても自動復帰しません。
-通常ノードは ~/reboot に論理 motor_id を指定して対象 VESC を再起動し、全台へ新しい指令を送ります
+通常ノードは ~/reboot に論理 logical_id を指定して対象 VESC を再起動し、全台へ新しい指令を送ります
 plugin は controller_manager による lifecycle の復旧操作で再開します
 
 plugin の `command_timeout_ms` は hardware `write()` の指令更新を監視します。

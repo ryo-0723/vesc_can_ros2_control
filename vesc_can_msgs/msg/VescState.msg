@@ -2,7 +2,7 @@
 builtin_interfaces/Time stamp
 
 # Logical ID from YAML/URDF, shared with commands and events
-uint8 motor_id
+uint8 logical_id
 
 # STATUS1: joint/output velocity [rad/s], pole pairs, gearing and direction applied
 float64 velocity_rad_s

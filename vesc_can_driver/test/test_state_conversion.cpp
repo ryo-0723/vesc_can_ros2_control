@@ -30,8 +30,8 @@ MotorConfig state_conversion_config()
 {
   MotorConfig cfg;
   cfg.name = "drive_joint";
-  cfg.motor_id = 1;
-  cfg.controller_id = 11;
+  cfg.logical_id = 1;
+  cfg.motor_id = 11;
   cfg.gear_ratio = 2.0;
   cfg.direction = -1.0;
   cfg.feedback_timeout = 200ms;
@@ -59,7 +59,7 @@ TEST(StateConversion, ConvertsFeedbackAndKeepsLogicalIdentityWithCompactMonitori
   receive_all_statuses(core, received_at);
   const auto &state = core.motors().front().state();
   const auto msg = make_vesc_state(cfg, state, received_at);
-  EXPECT_EQ(msg.motor_id, 1);  // Different from physical CAN ID 11.
+  EXPECT_EQ(msg.logical_id, 1);  // Different from physical CAN ID 11.
   EXPECT_NEAR(msg.velocity_rad_s, -kPi, 1e-9);
   EXPECT_NEAR(state.vel_rad_s, -kPi, 1e-9);
   EXPECT_FLOAT_EQ(msg.motor_current_a, 1.5f);
@@ -192,8 +192,8 @@ TEST_F(StatePublisherTest, EventsContainLogicalIdsAndFaultNamesAndRetainAllStopp
   auto first = state_conversion_config();
   auto second = first;
   second.name = "steer_joint";
-  second.motor_id = 2;
-  second.controller_id = 21;
+  second.logical_id = 2;
+  second.motor_id = 21;
   auto node = std::make_shared<rclcpp::Node>("compact_event_test");
   std::vector<vesc_can_msgs::msg::VescEvent> events;
   const auto qos = rclcpp::QoS(2).reliable().transient_local();
@@ -221,7 +221,7 @@ TEST_F(StatePublisherTest, EventsContainLogicalIdsAndFaultNamesAndRetainAllStopp
     publisher.publish_error(
       {"raw driver reason", protocol::FaultCode{21, static_cast<std::uint8_t>(code)}});
     ASSERT_TRUE(wait_for([&]() { return events.size() == count + 1; }));
-    EXPECT_EQ(events.back().motor_id, 2);
+    EXPECT_EQ(events.back().logical_id, 2);
     EXPECT_EQ(events.back().message, "VESC fault_code=" + std::to_string(code) + " (" + name + ")");
   }
   const auto count = events.size();
@@ -230,14 +230,14 @@ TEST_F(StatePublisherTest, EventsContainLogicalIdsAndFaultNamesAndRetainAllStopp
   EXPECT_EQ(events.size(), count);
   publisher.publish_error({"CAN error frame", std::nullopt});
   ASSERT_TRUE(wait_for([&]() { return events.size() == count + 2; }));
-  EXPECT_EQ(events[count].motor_id, 1);
-  EXPECT_EQ(events[count + 1].motor_id, 2);
+  EXPECT_EQ(events[count].logical_id, 1);
+  EXPECT_EQ(events[count + 1].logical_id, 2);
   EXPECT_EQ(events[count].message, "CAN error frame");
   std::vector<vesc_can_msgs::msg::VescEvent> retained;
   auto late_sub = node->create_subscription<vesc_can_msgs::msg::VescEvent>("/compact_test/event",
     qos, [&](vesc_can_msgs::msg::VescEvent::ConstSharedPtr msg) { retained.push_back(*msg); });
   ASSERT_TRUE(wait_for([&]() { return retained.size() == 2; }));
-  EXPECT_EQ((std::set<std::uint8_t>{retained[0].motor_id, retained[1].motor_id}),
+  EXPECT_EQ((std::set<std::uint8_t>{retained[0].logical_id, retained[1].logical_id}),
     (std::set<std::uint8_t>{1, 2}));
   EXPECT_EQ(retained[0].message, "CAN error frame");
   EXPECT_EQ(retained[1].message, "CAN error frame");

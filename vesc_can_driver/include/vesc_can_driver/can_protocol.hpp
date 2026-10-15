@@ -10,32 +10,32 @@ namespace vesc_can_driver
 {
 struct FaultCode
 {
-  std::uint8_t controller_id{};
+  std::uint8_t motor_id{};
   std::uint8_t code{};
 };
 
 struct MotionFeedback
 {
-  std::uint8_t controller_id{};
+  std::uint8_t motor_id{};
   std::int32_t electrical_rpm{};
   double motor_current_a{};
   double duty_cycle{};
 };
 struct ChargeFeedback
 {
-  std::uint8_t controller_id{};
+  std::uint8_t motor_id{};
   double charge_drawn_ah{};
   double charge_regen_ah{};
 };
 struct EnergyFeedback
 {
-  std::uint8_t controller_id{};
+  std::uint8_t motor_id{};
   double energy_drawn_wh{};
   double energy_regen_wh{};
 };
 struct ControlFeedback
 {
-  std::uint8_t controller_id{};
+  std::uint8_t motor_id{};
   double temperature_fet_c{};
   double temperature_motor_c{};
   double input_current_a{};
@@ -43,13 +43,13 @@ struct ControlFeedback
 };
 struct PositionFeedback
 {
-  std::uint8_t controller_id{};
+  std::uint8_t motor_id{};
   std::int32_t tachometer_counts{};
   double input_voltage_v{};
 };
 struct AnalogFeedback
 {
-  std::uint8_t controller_id{};
+  std::uint8_t motor_id{};
   double adc_1_v{};
   double adc_2_v{};
   double adc_3_v{};
@@ -63,10 +63,10 @@ using VescFeedback = std::variant<MotionFeedback, ChargeFeedback, EnergyFeedback
 
 namespace vesc_can_driver::protocol
 {
-constexpr std::uint8_t kBroadcastControllerId = 255;
+constexpr std::uint8_t kBroadcastMotorId = 255;
 // Selective 故障応答の宛先に予約する固定 ID（モータには割り当てない）
 constexpr std::uint8_t kReplyCanId = 254;
-constexpr std::uint32_t kControllerIdMask = 0xFF;
+constexpr std::uint32_t kMotorIdMask = 0xFF;
 constexpr std::uint32_t kPacketIdShift = 8;
 constexpr std::uint32_t kExtendedCanIdMask = 0x1FFFFFFF;
 
@@ -91,12 +91,12 @@ using FaultCode = vesc_can_driver::FaultCode;
 /// @brief CAN の short buffer で VESC 故障コードだけを問い合わせる
 /// @note 応答先は kReplyCanId に固定
 /// @throws std::invalid_argument ID が予約済みの 254 または broadcast の 255
-can_msgs::msg::Frame make_fault_request(std::uint8_t controller_id);
+can_msgs::msg::Frame make_fault_request(std::uint8_t motor_id);
 
 /// @brief 指定 VESC の COMM_REBOOT を short buffer で送るフレームを生成
 /// @return 拡張フレーム（DLC=3），応答は要求しない
 /// @throws std::invalid_argument ID が予約済みの 254 または broadcast の 255
-can_msgs::msg::Frame make_reboot_frame(std::uint8_t controller_id);
+can_msgs::msg::Frame make_reboot_frame(std::uint8_t motor_id);
 
 /// @brief 故障コードのみを含む selective 応答を検査して読み取る
 /// @note 宛先は kReplyCanId，送信元 VESC ID は data[0]
@@ -114,31 +114,31 @@ using Status6 = AnalogFeedback;
 // このライブラリでは CAN フレームを返し，送信は VescTransport が担当する
 
 /// @brief duty 比の指令フレームを生成
-/// @param controller_id 宛先 ID（0〜254）
+/// @param motor_id 宛先 ID（0〜254）
 /// @param duty VESC 方向の比率 [-1, 1]，0.5 は 50%
 /// @return 拡張 CAN フレーム（DLC=4），比率を 100000 倍して格納
 /// @throws std::out_of_range 非有限値または比率の範囲外
-can_msgs::msg::Frame comm_can_set_duty(std::uint8_t controller_id, double duty);
+can_msgs::msg::Frame comm_can_set_duty(std::uint8_t motor_id, double duty);
 
 /// @brief ERPM の速度指令フレームを生成
-/// @param controller_id 宛先 ID（0〜254）
+/// @param motor_id 宛先 ID（0〜254）
 /// @param electrical_rpm 電気回転数 [ERPM]
 /// @return 拡張 CAN フレーム（DLC=4）
-can_msgs::msg::Frame comm_can_set_rpm(std::uint8_t controller_id, std::int32_t electrical_rpm);
+can_msgs::msg::Frame comm_can_set_rpm(std::uint8_t motor_id, std::int32_t electrical_rpm);
 
 /// @brief モータ電流の指令フレームを生成
-/// @param controller_id 宛先 ID（0〜254）
+/// @param motor_id 宛先 ID（0〜254）
 /// @param motor_current_a VESC 方向のモータ電流 [A]
 /// @return 拡張 CAN フレーム（DLC=4）
 /// @throws std::out_of_range 非有限値または倍率変換後の int32 範囲外
-can_msgs::msg::Frame comm_can_set_current(std::uint8_t controller_id, double motor_current_a);
+can_msgs::msg::Frame comm_can_set_current(std::uint8_t motor_id, double motor_current_a);
 
 /// @brief モータ PID 角度の指令フレームを生成
-/// @param controller_id 宛先 ID（0〜254）
+/// @param motor_id 宛先 ID（0〜254）
 /// @param motor_pid_position_deg モータ PID 角度 [deg]
 /// @return 拡張 CAN フレーム（DLC=4）
 /// @throws std::out_of_range 非有限値または倍率変換後の int32 範囲外
-can_msgs::msg::Frame comm_can_set_pos(std::uint8_t controller_id, double motor_pid_position_deg);
+can_msgs::msg::Frame comm_can_set_pos(std::uint8_t motor_id, double motor_pid_position_deg);
 
 /// @brief STATUS1 の ERPM・モータ電流・duty を読み取る
 /// @param frame 受信 CAN フレーム
