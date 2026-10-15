@@ -3,6 +3,7 @@
 複数のVESCを、1つのros2_control SystemInterfaceで管理します
 controller_managerが `vesc_can_ros2_control/VescSystem` を読み込み、通常ノードは起動しません
 CAN通信と状態配信には `vesc_can_driver` を使います
+各Systemが通信スレッドとpublisherを所有し、cleanupで自分の通信だけを終了します
 
 ## 設定例
 
@@ -73,6 +74,8 @@ VESCの再起動後は、オドメトリ側の前回値を取り直してくだ�
 
 オドメトリのcontrollerはstate interfaceを直接読めます
 状態のトピックは `/<System名>_can_io/motors/<joint名>/state` です
+controller_managerにnamespaceを指定した場合は、その配下に作られます
+複数のSystemは名前を分け、共有CANバス上のcontroller_idを重複させないようにします
 例では `/VescCanSystem_can_io/motors/drive_joint/state` になります
 `VescState` のmotor_idはURDFのlogical_idに対応します → [型と単位](../docs/messages.md)
 

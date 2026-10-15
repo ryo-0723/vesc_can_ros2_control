@@ -153,8 +153,8 @@ hardware_interface::CallbackReturn VescSystem::on_init(
   try {
     const auto &hw_info = params.hardware_info;
     const auto &hw_params = hw_info.hardware_parameters;
-    opts_.tx_topic = get_string_parameter(hw_params, "can_tx_topic", "/can/tx");
-    opts_.rx_topic = get_string_parameter(hw_params, "can_rx_topic", "/can/rx");
+    opts_.tx_topic = get_string_parameter(hw_params, "can_tx_topic", "can/tx");
+    opts_.rx_topic = get_string_parameter(hw_params, "can_rx_topic", "can/rx");
     opts_.send_period =
       std::chrono::milliseconds(get_integer_parameter(hw_params, "send_period_ms", 10));
     opts_.fault_period =
@@ -174,6 +174,7 @@ hardware_interface::CallbackReturn VescSystem::on_init(
     }
     vesc_can_driver::validate_configs(configs_);
     states_.resize(configs_.size());
+    pub_states_.resize(configs_.size());
     cmds_.resize(configs_.size());
     return hardware_interface::CallbackReturn::SUCCESS;
   } catch (const std::exception &error) {
@@ -201,7 +202,9 @@ void VescSystem::cache_interface_handles()
 hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecycle::State &)
 {
   try {
+    release_can_transport();
     std::fill(states_.begin(), states_.end(), vesc_can_driver::MotorState{});
+    std::fill(pub_states_.begin(), pub_states_.end(), vesc_can_driver::MotorState{});
     cache_interface_handles();
     const auto hw_node = get_node();
     auto node_opts = rclcpp::NodeOptions().use_global_arguments(false);
@@ -212,7 +215,7 @@ hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecyc
     auto can_node =
       std::make_shared<rclcpp::Node>(get_hardware_info().name + "_can_io", node_ns, node_opts);
     const auto error_topic =
-      get_string_parameter(get_hardware_info().hardware_parameters, "error_topic", "/vesc/event");
+      get_string_parameter(get_hardware_info().hardware_parameters, "error_topic", "vesc/event");
     state_pub_ =
       std::make_unique<vesc_can_driver::MotorStatePublisher>(*can_node, configs_, error_topic);
     transport_ = std::make_unique<vesc_can_driver::CanTransport>(configs_, opts_, can_node,
@@ -220,8 +223,8 @@ hardware_interface::CallbackReturn VescSystem::on_configure(const rclcpp_lifecyc
         const vesc_can_driver::DriverFault &fault) { pub->publish_error(fault); });
     state_timer_ =
       can_node->create_wall_timer(state_period_, [this, clock = can_node->get_clock()]() {
-        const auto states = transport_->snapshot();
-        state_pub_->publish(states, vesc_can_driver::SteadyClock::now(), clock->now());
+        transport_->try_snapshot(pub_states_);
+        state_pub_->publish(pub_states_, vesc_can_driver::SteadyClock::now(), clock->now());
       });
     transport_->start();
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -268,8 +271,8 @@ void VescSystem::release_can_transport()
     transport_->shutdown();
   }
   state_timer_.reset();
-  state_pub_.reset();
   transport_.reset();
+  state_pub_.reset();
 }
 
 hardware_interface::CallbackReturn VescSystem::on_cleanup(const rclcpp_lifecycle::State &)

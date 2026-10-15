@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 #include "vesc_can_driver/vesc_driver.hpp"
-#include "vesc_can_driver/vesc_state.hpp"
+#include "vesc_can_driver/vesc_node.hpp"
 
 namespace vesc_can_driver
 {

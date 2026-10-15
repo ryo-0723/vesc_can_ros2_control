@@ -76,9 +76,9 @@ public:
       motors_.push_back(motor);
     }
     feedback_pub_ = create_publisher<can_msgs::msg::Frame>(
-      declare_parameter<std::string>("can_rx_topic", "/can/rx"), rclcpp::SensorDataQoS());
+      declare_parameter<std::string>("can_rx_topic", "can/rx"), rclcpp::SensorDataQoS());
     cmd_sub_ = create_subscription<can_msgs::msg::Frame>(
-      declare_parameter<std::string>("can_tx_topic", "/can/tx"), 100,
+      declare_parameter<std::string>("can_tx_topic", "can/tx"), 100,
       [this](can_msgs::msg::Frame::ConstSharedPtr frame) { handle_can_command(*frame); });
     last_update_at_ = SteadyClock::now();
     feedback_timer_ = create_wall_timer(feedback_period, [this]() { update_motors(); });

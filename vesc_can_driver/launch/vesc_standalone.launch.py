@@ -11,6 +11,7 @@ def generate_launch_description():
     pkg_dir = Path(get_package_share_directory("vesc_can_driver"))
     return LaunchDescription(
         [
+            DeclareLaunchArgument("namespace", default_value=""),
             DeclareLaunchArgument("use_mock", default_value="false"),
             DeclareLaunchArgument(
                 "config", default_value=str(pkg_dir / "examples/standalone.yaml")
@@ -18,11 +19,13 @@ def generate_launch_description():
             Node(
                 package="vesc_can_driver",
                 executable="fake_vesc_node",
+                namespace=LaunchConfiguration("namespace"),
                 condition=IfCondition(LaunchConfiguration("use_mock")),
             ),
             Node(
                 package="vesc_can_driver",
                 executable="vesc_node",
+                namespace=LaunchConfiguration("namespace"),
                 parameters=[LaunchConfiguration("config")],
                 output="screen",
             ),

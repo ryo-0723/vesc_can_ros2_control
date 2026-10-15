@@ -14,8 +14,8 @@
   <ros2_control name="VescCanSystem" type="system">
     <hardware>
       <plugin>vesc_can_ros2_control/VescSystem</plugin>
-      <param name="can_tx_topic">/can/tx</param>
-      <param name="can_rx_topic">/can/rx</param>
+      <param name="can_tx_topic">can/tx</param>
+      <param name="can_rx_topic">can/rx</param>
       <param name="send_period_ms">10</param>
       <param name="fault_poll_period_ms">100</param>
       <param name="state_publish_period_ms">20</param>

@@ -243,3 +243,10 @@ ros2_control の URDF には全 joint に一意の logical_id を追加します
 通常ノードと同じモータなら YAML と URDF の logical_id を揃えます
 通常ノードの指令、再起動サービス、CAN の形式、ros2_control の state / command interface は維持します
 通常ノードは VescStateArray を周期配信し、異常を検出したときだけ /vesc/event に通知します
+
+## C++ヘッダの変更
+
+共通publisherと状態変換は `vesc_can_driver/vesc_node.hpp` にまとめました
+以前の `vesc_state.hpp` を使っている場合はincludeを変更し、CMakeでは `vesc_can_driver::node` にリンクします
+トピックの既定値と設定例は相対名になり、namespaceを指定するとその配下に配置されます
+namespaceなしの起動では従来の `/vesc/commands`・`/vesc/state`・`/vesc/event` を使用します

@@ -2,11 +2,11 @@
 # 模擬CAN用のトピックを使用する
 /**/vesc_can_driver:
   ros__parameters:
-    can_tx_topic: /bench/can/tx
-    can_rx_topic: /bench/can/rx
-    command_topic: /vesc/commands
-    state_topic: /vesc/state
-    error_topic: /vesc/event
+    can_tx_topic: bench/can/tx
+    can_rx_topic: bench/can/rx
+    command_topic: vesc/commands
+    state_topic: vesc/state
+    error_topic: vesc/event
     fault_poll_period_ms: 100
     update_period_ms: 10
     state_publish_period_ms: 20

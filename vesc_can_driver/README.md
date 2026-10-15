@@ -32,6 +32,19 @@ ros2_controlを使う場合も、CAN通信と単位変換はこのパッケー�
 ros2 launch vesc_can_driver vesc_standalone.launch.py config:=/path/to/motors.yaml
 ```
 
+## 複数ノードで使う
+
+別々の端末でnamespaceを変えて起動します
+
+```bash
+ros2 launch vesc_can_driver vesc_standalone.launch.py namespace:=front config:=/path/to/front.yaml
+ros2 launch vesc_can_driver vesc_standalone.launch.py namespace:=rear config:=/path/to/rear.yaml
+```
+
+例のYAMLは相対トピック名なので、指令は `/front/vesc/commands` と `/rear/vesc/commands` に分かれます
+状態・エラー・CANトピックも同様です
+CANブリッジを共有する場合だけ、両方のYAMLに同じ絶対CANトピック名を指定し、CAN IDを重複させないようにします
+
 ## トピックとサービス
 
 | 名前 | 型 | 用途 |
@@ -40,6 +53,9 @@ ros2 launch vesc_can_driver vesc_standalone.launch.py config:=/path/to/motors.ya
 | /vesc/state | vesc_can_msgs/msg/VescStateArray | 全モータの状態、既定50 Hz |
 | /vesc/event | vesc_can_msgs/msg/VescEvent | motor_idとエラー文字列 |
 | ~/reboot | vesc_can_msgs/srv/Reboot | 指定したmotor_idのVESCを再起動 |
+
+表はnamespaceなしで起動した場合の名前です
+既定のCANトピックは `can/tx` と `can/rx` です
 
 指令は指定されたモータだけ更新し、未送信の値は最新値で上書きします
 CAN送信は100 Hzのタイマーで行い、指令トピックの配信周期とは分けています
@@ -85,7 +101,7 @@ VESC Toolで必要なSTATUSの周期送信を有効にします
 |---|---|---|
 | vesc_can_driver::protocol | vesc_protocol.hpp | CANフレームの生成・デコード |
 | vesc_can_driver::driver | vesc_driver.hpp | 設定・状態・制御・CAN通信 |
-| vesc_can_driver::state | vesc_state.hpp | ROSの状態・エラー配信 |
+| vesc_can_driver::node | vesc_node.hpp | 通常ノード、共通の状態・エラー配信 |
 
 フレーム処理だけなら `protocol` にリンクします
 指令関数の名前は [公式comm_can.c](https://github.com/vedderb/bldc/blob/94b305ec124b67b0161f2d3d85c4d5b35e48edc5/comm/comm_can.c#L469-L511) の

@@ -120,3 +120,6 @@ colcon test-result --verbose
 CANの形式は [公式VESC firmware 6.06](https://github.com/vedderb/bldc/tree/94b305ec124b67b0161f2d3d85c4d5b35e48edc5) に合わせています
 msgとsrvは独自定義です
 ライセンスは3パッケージ共通の [MIT](LICENSE) です
+
+複数の通常ノードはnamespaceを分けて起動できます
+設定例は [通常ノードのREADME](vesc_can_driver/README.md#複数ノードで使う)、所有関係とファイルの役割は [内部構成](docs/architecture.md) にまとめています

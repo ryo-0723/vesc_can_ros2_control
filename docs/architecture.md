@@ -14,19 +14,36 @@
 | 各パッケージのtest | 単体テストと統合テスト |
 | docs | 使い方の詳細と検証記録 |
 
-ドライバの実装は、次の4つを中心にしています
+ドライバは最初の3ファイル、ros2_controlは最後の1ファイルに分けています
 
 | ファイル | 役割 |
 |---|---|
 | [vesc_protocol.cpp](../vesc_can_driver/src/vesc_protocol.cpp) | VESCのCAN ID・ペイロード形式、フレームの生成とデコード |
 | [vesc_driver.cpp](../vesc_can_driver/src/vesc_driver.cpp) | モータ設定、単位変換、制御判断、CAN通信と周期送信 |
-| [vesc_node.cpp](../vesc_can_driver/src/vesc_node.cpp) | 通常ノードの設定、指令配列、再起動サービス、状態配列の配信 |
-| [vesc_state.cpp](../vesc_can_driver/src/vesc_state.cpp) | 共通のVescState変換、状態とエラーの配信 |
+| [vesc_node.cpp](../vesc_can_driver/src/vesc_node.cpp) | 通常ノードと、両方式で共用する状態変換・状態とエラーの配信 |
 | [vesc_system.cpp](../vesc_can_ros2_control/src/vesc_system.cpp) | ros2_controlの設定、lifecycle、state / command interface |
 
-公開ヘッダはドライバの `vesc_protocol.hpp`、`vesc_driver.hpp`、`vesc_state.hpp` と、pluginの `vesc_system.hpp` です
-`vesc_node` は実行ファイルなので公開ヘッダを持ちません
+公開ヘッダはドライバの `vesc_protocol.hpp`、`vesc_driver.hpp`、`vesc_node.hpp` と、pluginの `vesc_system.hpp` です
+ヘッダにクラスの宣言、cppに実装を置きます
+`vesc_main.cpp` は通常ノードを生成してspinするだけの起動入口です
+`vesc_can_driver::node` は通常ノードと共通publisherのライブラリで、hardware pluginは通常ノードを起動せずpublisherだけを使います
 模擬VESCは `test/support/fake_vesc_node.cpp` に置き、`use_mock` の動作確認にも使うため、BUILD_TESTING=OFFでもインストールします
+
+## 所有関係と複数起動
+
+`VescNode` と `VescSystem` は、それぞれ自分の `CanTransport` と `MotorStatePublisher` を所有します
+`unique_ptr` はそのインスタンスの所有者が1つであることを表し、ノードの起動数を制限しません
+状態配信は通常ノードとhardware pluginで共用し、CAN通信側にはROSの状態msgを持ち込まない構成です
+
+トピックの既定値は相対名です
+たとえばnamespaceが `/front` なら、`vesc/commands` は `/front/vesc/commands` になります
+同じnamespaceでノード名だけ変えても指令・状態トピックは共通になるため、独立運用ではnamespaceを分けます
+通常ノードの内部通信ノード名は `<ノード名>_can_io`、hardware側は `<hardware名>_can_io` です
+hardware名は同じcontroller_manager内で一意にします
+
+CANブリッジを共有する場合は、両方の設定で同じ絶対CANトピックを指定します
+その場合、物理CAN IDはノードをまたいで重複させず、同じモータを複数のノードから操作しません
+論理motor_idは独立したnamespace間なら同じ値を使用できます
 
 ## 処理の流れ
 

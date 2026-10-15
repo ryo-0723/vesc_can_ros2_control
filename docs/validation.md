@@ -694,3 +694,19 @@ ROS 2 Lyrical / rmw_fastrtps_cpp、ROS_DOMAIN_ID=186で70ケースが成功し�
 - YAML・URDF・文書の参照と、C++・Pythonの書式を確認
 
 検証は模擬CANで、実VESC・実CANバスの検証は行っていません
+
+
+## 複数ノードとC++の構成整理（2026-10-15）
+
+ノード関係をvesc_node.hpp / cppにまとめ、起動入口をvesc_main.cppへ移しました
+状態配信のクラスは通常ノードとhardware pluginで共用し、各インスタンスがunique_ptrで所有します
+トピックの既定値・通常ノードのYAML例は相対名に変更し、内部CANノード名にも通常ノード名を反映しています
+
+ROS 2 Lyricalの専用コンテナで、ドライバ単独とhardware pluginをビルドしました
+73ケースが成功し、colconの集計は79件、エラー・失敗・スキップは0件です
+追加したテストは、同一プロセスの2ノード間の指令・状態・異常の分離、内部ノード名の区別、2つのhardware componentのcleanupと再configureです
+
+インストール済みlaunchからnamespaceを分けた2組を同時起動し、それぞれ異なる速度・位置の指令が反映されること、片方の終了後も他方が動き続けることを確認しました
+通常ノードとros2_controlの基本例も起動し、指令とフィードバックを確認しています
+C++のclang-format、Python構文、YAML・URDFの読み込みと更新した文書のリンクを検査しました
+実機CANとモータでの検証は行っていません

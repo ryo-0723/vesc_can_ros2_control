@@ -16,7 +16,7 @@ add_library(vesc_hardware SHARED src/vesc_system.cpp)
 target_include_directories(vesc_hardware PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(vesc_hardware PUBLIC vesc_can_driver::driver vesc_can_driver::state
+target_link_libraries(vesc_hardware PUBLIC vesc_can_driver::driver vesc_can_driver::node
   hardware_interface::hardware_interface pluginlib::pluginlib rclcpp_lifecycle::rclcpp_lifecycle)
 pluginlib_export_plugin_description_file(hardware_interface vesc_plugins.xml)
 

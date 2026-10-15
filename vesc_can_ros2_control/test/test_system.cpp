@@ -1,5 +1,7 @@
+#include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "gtest/gtest.h"
@@ -179,6 +181,69 @@ TEST_F(SystemConfigurationTest, RejectsInvalidHardwarePeriods)
       EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
     }
   }
+}
+
+TEST_F(SystemConfigurationTest, IndependentComponentsSurviveCleanupAndReconfigure)
+{
+  using namespace std::chrono_literals;
+  auto first_params = make_parameters();
+  auto second_params = make_parameters();
+  first_params.hardware_info.name = "VescFirst";
+  second_params.hardware_info.name = "VescSecond";
+  first_params.hardware_info.hardware_parameters = {{"can_tx_topic", "/hardware_a/can/tx"},
+    {"can_rx_topic", "/hardware_a/can/rx"}, {"error_topic", "/hardware_a/vesc/event"},
+    {"fault_poll_period_ms", "0"}};
+  second_params.hardware_info.hardware_parameters = {{"can_tx_topic", "/hardware_b/can/tx"},
+    {"can_rx_topic", "/hardware_b/can/rx"}, {"error_topic", "/hardware_b/vesc/event"},
+    {"fault_poll_period_ms", "0"}};
+  VescSystem first;
+  VescSystem second;
+  ASSERT_EQ(first.init(first_params), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(second.init(second_params), hardware_interface::CallbackReturn::SUCCESS);
+  first.on_export_state_interfaces();
+  first.on_export_command_interfaces();
+  second.on_export_state_interfaces();
+  second.on_export_command_interfaces();
+  const rclcpp_lifecycle::State lifecycle_state;
+  ASSERT_EQ(first.on_configure(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(second.on_configure(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+  auto observer = std::make_shared<rclcpp::Node>("hardware_lifetime_test");
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(observer);
+  int first_states = 0;
+  int second_states = 0;
+  int second_frames = 0;
+  auto first_sub = observer->create_subscription<vesc_can_msgs::msg::VescState>(
+    "/VescFirst_can_io/motors/drive_joint/state", 10,
+    [&](vesc_can_msgs::msg::VescState::ConstSharedPtr) { ++first_states; });
+  auto second_sub = observer->create_subscription<vesc_can_msgs::msg::VescState>(
+    "/VescSecond_can_io/motors/drive_joint/state", 10,
+    [&](vesc_can_msgs::msg::VescState::ConstSharedPtr) { ++second_states; });
+  auto frame_sub = observer->create_subscription<can_msgs::msg::Frame>(
+    "/hardware_b/can/tx", 100, [&](can_msgs::msg::Frame::ConstSharedPtr) { ++second_frames; });
+  const auto wait_for = [&](auto condition) {
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      exec.spin_some();
+      if (condition()) {
+        return true;
+      }
+      std::this_thread::sleep_for(2ms);
+    }
+    return condition();
+  };
+  ASSERT_TRUE(
+    wait_for([&]() { return first_states >= 2 && second_states >= 2 && second_frames >= 2; }));
+  ASSERT_EQ(first.on_cleanup(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+  const auto states_before = second_states;
+  const auto frames_before = second_frames;
+  ASSERT_TRUE(wait_for(
+    [&]() { return second_states >= states_before + 3 && second_frames >= frames_before + 5; }));
+  const auto first_before = first_states;
+  ASSERT_EQ(first.on_configure(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_TRUE(wait_for([&]() { return first_states >= first_before + 3; }));
+  EXPECT_EQ(first.on_shutdown(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(second.on_cleanup(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
 }
 
 }  // namespace

@@ -250,8 +250,8 @@ private:
 
 struct TransportOptions
 {
-  std::string tx_topic{"/can/tx"};
-  std::string rx_topic{"/can/rx"};
+  std::string tx_topic{"can/tx"};
+  std::string rx_topic{"can/rx"};
   std::chrono::milliseconds send_period{10};
   std::chrono::milliseconds fault_period{100};  // 0 disables fault queries
   bool auto_activate{false};  // standalone starts on fresh input; hardware uses lifecycle
