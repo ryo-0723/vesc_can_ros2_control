@@ -13,6 +13,7 @@ msgだけを使う上位ノードは `vesc_can_msgs` に依存します
 | [can_protocol.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/can_protocol.hpp) | CANのID・ペイロード形式、フレームの生成とデコード |
 | [vesc_node.hpp / cpp](../vesc_can_driver/include/vesc_can_driver/vesc_node.hpp) | 通常ノード、共通の状態・エラー配信 |
 | [vesc_system.hpp / cpp](../vesc_can_ros2_control/include/vesc_can_ros2_control/vesc_system.hpp) | ros2_controlのinterfaceとlifecycle |
+| [position_controller.hpp / cpp](../vesc_can_ros2_control/include/vesc_can_ros2_control/position_controller.hpp) | 直動位置の参照軌道、PID、電流飽和・積分上限 |
 
 ヘッダに宣言、cppに実装を置きます
 `vesc_main.cpp` は通常ノードを生成してspinする起動入口です
@@ -43,7 +44,11 @@ CANフレームの生成とデコードはcan_protocolにまとめます
 上位ノードの指令値は、モータごとの未送信値として保存します
 100 HzのタイマーでDriverCoreが各MotorControllerを呼び、モードに応じたCANフレームを生成します
 VescTransportはタイムスタンプを付けてCANトピックへ配信します
-内部指令を別の形式へ変換する中継クラスは置きません
+
+直動の `position` command interface は VescSystem が保持する PositionController で処理します。
+controller_manager の周期に合わせて速度・加速度を制限した参照軌道を更新し、
+実測位置・速度から PID 電流 [A] を作って Current モードの VescTransport に渡します。
+VESC の単回転位置 PID と通常ノードのモード構成は変更しません。
 
 受信はcan_protocolで1回デコードし、DriverCoreのID対応表でモータへ振り分けます
 対応表は構築時に作成し、受信ごとの全台検索は行いません

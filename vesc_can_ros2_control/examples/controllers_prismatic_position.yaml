@@ -1,0 +1,17 @@
+# vesc_prismatic_position.urdf と組み合わせる。位置指令の単位は m。
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    position_controller:
+      type: forward_command_controller/ForwardCommandController
+joint_state_broadcaster:
+  ros__parameters:
+    update_rate: 50
+    joints: [slider_joint]
+    interfaces: [position, velocity]
+position_controller:
+  ros__parameters:
+    joints: [slider_joint]
+    interface_name: position

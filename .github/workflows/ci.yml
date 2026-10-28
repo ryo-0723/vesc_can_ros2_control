@@ -39,7 +39,7 @@ jobs:
           black --check --line-length 100 \
             ws/src/vesc_can_ros2_control/vesc_can_driver/launch \
             ws/src/vesc_can_ros2_control/vesc_can_ros2_control/launch \
-            ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test/test_integration.py
+            ws/src/vesc_can_ros2_control/vesc_can_ros2_control/test
       - name: Build interfaces independently
         working-directory: ws
         run: |

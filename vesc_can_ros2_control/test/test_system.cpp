@@ -1,4 +1,7 @@
+#include <bit>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -13,6 +16,42 @@ namespace vesc_can_ros2_control
 {
 namespace
 {
+TEST(JointConversionTest, ConvertsLinearPositionVelocityAndAcceleration)
+{
+  const JointConversion conversion(0.005, 0.125);
+  const double turn = 2.0 * vesc_can_driver::kPi;
+  EXPECT_DOUBLE_EQ(conversion.position_from_rotary(0.0), 0.125);
+  EXPECT_NEAR(conversion.position_from_rotary(turn), 0.130, 1e-15);
+  EXPECT_NEAR(conversion.position_from_rotary(-2 * turn), 0.115, 1e-15);
+  EXPECT_NEAR(conversion.velocity_from_rotary(turn), 0.005, 1e-15);
+  EXPECT_NEAR(conversion.velocity_to_rotary(-0.005), -turn, 1e-14);
+  EXPECT_NEAR(conversion.velocity_from_rotary(conversion.velocity_to_rotary(0.02)), 0.02, 1e-15);
+  // Gear ratio and direction belong to the driver and must be applied only once.
+  vesc_can_driver::MotorConfig cfg;
+  cfg.gear_ratio = 2.0;
+  cfg.direction = -1.0;
+  EXPECT_NEAR(vesc_can_driver::vel_to_erpm(cfg, conversion.velocity_to_rotary(0.005)), -840, 1e-12);
+  EXPECT_NEAR(
+    conversion.velocity_from_rotary(vesc_can_driver::erpm_to_vel(cfg, -840)), 0.005, 1e-15);
+  EXPECT_NEAR(
+    conversion.position_from_rotary(vesc_can_driver::tacho_to_pos(cfg, -84)), 0.130, 1e-15);
+}
+
+TEST(JointConversionTest, PreservesRotaryUnitsAndRejectsInvalidLinearScale)
+{
+  const JointConversion rotary;
+  EXPECT_DOUBLE_EQ(rotary.position_from_rotary(-3.0), -3.0);
+  EXPECT_DOUBLE_EQ(rotary.velocity_from_rotary(2.0), 2.0);
+  EXPECT_DOUBLE_EQ(rotary.velocity_to_rotary(2.0), 2.0);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (const double lead : {0.0, -0.005, nan, std::numeric_limits<double>::infinity(),
+         std::numeric_limits<double>::denorm_min()}) {
+    EXPECT_THROW(JointConversion(lead, 0.0), std::invalid_argument);
+  }
+  EXPECT_THROW(JointConversion(0.005, nan), std::invalid_argument);
+  EXPECT_TRUE(std::isnan(JointConversion(0.005, 0.1).position_from_rotary(nan)));
+}
+
 class SystemConfigurationTest : public ::testing::Test
 {
 protected:
@@ -42,7 +81,199 @@ protected:
     params.clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
     return params;
   }
+
+  static hardware_interface::HardwareComponentParams make_linear_parameters()
+  {
+    auto params = make_parameters();
+    params.hardware_info.original_xml = R"(
+      <robot name="linear_test">
+        <link name="base"/><link name="slider"/>
+        <joint name="drive_joint" type="prismatic">
+          <parent link="base"/><child link="slider"/><axis xyz="1 0 0"/>
+          <limit lower="0" upper="0.3" effort="100" velocity="0.02"/>
+        </joint>
+      </robot>)";
+    auto &joint = params.hardware_info.joints[0];
+    joint.parameters["linear_lead_m_per_rev"] = "0.005";
+    joint.parameters["position_offset_m"] = "0.1";
+    joint.parameters["max_velocity"] = "0.02";
+    joint.parameters["velocity_slew_rate"] = "0.05";
+    return params;
+  }
+  static hardware_interface::HardwareComponentParams make_linear_position_parameters()
+  {
+    auto params = make_linear_parameters();
+    auto &joint = params.hardware_info.joints[0];
+    joint.command_interfaces[0].name = "position";
+    joint.state_interfaces[0].name = "position";
+    joint.parameters["min_position"] = "0";
+    joint.parameters["max_position"] = "0.3";
+    joint.parameters["max_current_a"] = "2";
+    joint.parameters["position_pid_kp"] = "1000";
+    joint.parameters["position_pid_ki"] = "10";
+    joint.parameters["position_pid_kd"] = "100";
+    joint.parameters["position_pid_integral_limit_a"] = "0.5";
+    return params;
+  }
 };
+
+TEST_F(SystemConfigurationTest, SupportsPrismaticPositionWithoutSingleTurnLimit)
+{
+  auto params = make_linear_position_parameters();
+  VescSystem hardware;
+  EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::SUCCESS);
+}
+
+TEST_F(SystemConfigurationTest, RejectsInvalidPositionPidSettings)
+{
+  for (const auto &name : {"min_position", "max_position", "position_pid_kp", "max_current_a"}) {
+    auto params = make_linear_position_parameters();
+    params.hardware_info.joints[0].parameters.erase(name);
+    VescSystem hardware;
+    EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
+  }
+  for (const auto &[name, value] : {std::pair{"position_pid_kp", "0"}, {"position_pid_ki", "-1"},
+         {"position_pid_kd", "nan"}, {"position_pid_integral_limit_a", "0"},
+         {"position_pid_integral_limit_a", "3"}, {"position_pid_max_period_ms", "0"},
+         {"min_position", "-0.01"}, {"max_position", "0.31"}, {"max_velocity", "0.03"}}) {
+    SCOPED_TRACE(std::string(name) + "=" + value);
+    auto params = make_linear_position_parameters();
+    params.hardware_info.joints[0].parameters[name] = value;
+    VescSystem hardware;
+    EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
+  }
+}
+
+TEST_F(
+  SystemConfigurationTest, PositionPidRequiresTachometerStopsOnStaleFeedbackAndResetsOnActivation)
+{
+  using namespace std::chrono_literals;
+  auto params = make_linear_position_parameters();
+  params.hardware_info.name = "VescPidSafety";
+  params.hardware_info.hardware_parameters = {{"can_tx_topic", "/pid_safety/can/tx"},
+    {"can_rx_topic", "/pid_safety/can/rx"}, {"fault_poll_period_ms", "0"},
+    {"activation_timeout_ms", "30"}};
+  params.hardware_info.joints[0].parameters["direction"] = "-1";
+  params.hardware_info.joints[0].parameters["feedback_timeout_ms"] = "100";
+  VescSystem hardware;
+  ASSERT_EQ(hardware.init(params), hardware_interface::CallbackReturn::SUCCESS);
+  hardware.on_export_state_interfaces();
+  hardware.on_export_command_interfaces();
+  const rclcpp_lifecycle::State lifecycle_state;
+  ASSERT_EQ(hardware.on_configure(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+  auto observer = std::make_shared<rclcpp::Node>("pid_safety_test");
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  auto publisher =
+    observer->create_publisher<can_msgs::msg::Frame>("/pid_safety/can/rx", rclcpp::SensorDataQoS());
+  std::int32_t last_current = 0;
+  auto subscriber = observer->create_subscription<can_msgs::msg::Frame>(
+    "/pid_safety/can/tx", 100, [&](can_msgs::msg::Frame::ConstSharedPtr frame) {
+      if (frame->id == ((vesc_can_driver::protocol::kSetCurrentId << 8) | 11)) {
+        std::uint32_t bits = 0;
+        for (int byte = 0; byte < 4; ++byte)
+          bits = (bits << 8) | frame->data[byte];
+        last_current = std::bit_cast<std::int32_t>(bits);
+      }
+    });
+  can_msgs::msg::Frame status;
+  status.is_extended = true;
+  status.dlc = 8;
+  const auto feedback = [&](bool tachometer) {
+    status.id = (vesc_can_driver::protocol::kStatus1Id << 8) | 11;
+    publisher->publish(status);
+    if (tachometer) {
+      status.id = (vesc_can_driver::protocol::kStatus5Id << 8) | 11;
+      publisher->publish(status);
+    }
+  };
+  const auto wait_for = [&](auto condition, bool tachometer = true) {
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      feedback(tachometer);
+      executor.spin_some();
+      if (condition())
+        return true;
+      std::this_thread::sleep_for(2ms);
+    }
+    return condition();
+  };
+  ASSERT_TRUE(wait_for([&]() { return publisher->get_subscription_count() > 0; }, false));
+  EXPECT_EQ(hardware.on_activate(lifecycle_state), hardware_interface::CallbackReturn::ERROR);
+  ASSERT_TRUE(wait_for([&]() {
+    return hardware.on_activate(lifecycle_state) == hardware_interface::CallbackReturn::SUCCESS;
+  }));
+  EXPECT_DOUBLE_EQ(hardware.get_command<double>("drive_joint/position"), 0.1);
+  const auto now = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  const auto period = rclcpp::Duration::from_seconds(0.01);
+  hardware.set_command("drive_joint/position", 0.2);
+  ASSERT_EQ(hardware.read(now, period), hardware_interface::return_type::OK);
+  ASSERT_EQ(hardware.write(now, period), hardware_interface::return_type::OK);
+  ASSERT_TRUE(wait_for([&]() { return last_current < 0; }));
+  EXPECT_GE(last_current, -2000);
+  // Keep STATUS1 fresh: losing STATUS5 alone must stop position control.
+  ASSERT_TRUE(wait_for(
+    [&]() { return hardware.read(now, period) == hardware_interface::return_type::ERROR; }, false));
+  ASSERT_TRUE(wait_for([&]() { return last_current == 0; }, false));
+  ASSERT_EQ(hardware.on_deactivate(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_TRUE(wait_for([&]() {
+    return hardware.on_activate(lifecycle_state) == hardware_interface::CallbackReturn::SUCCESS;
+  }));
+  // Neither the old target nor the old integral is restored.
+  EXPECT_DOUBLE_EQ(hardware.get_command<double>("drive_joint/position"), 0.1);
+  ASSERT_EQ(hardware.write(now, period), hardware_interface::return_type::OK);
+  hardware.set_command("drive_joint/position", 0.2);
+  EXPECT_EQ(hardware.write(now, rclcpp::Duration::from_seconds(0.2)),
+    hardware_interface::return_type::ERROR);
+  EXPECT_EQ(hardware.on_cleanup(lifecycle_state), hardware_interface::CallbackReturn::SUCCESS);
+}
+
+TEST_F(SystemConfigurationTest, SupportsPrismaticVelocityAndHybrid)
+{
+  for (const auto &mode : {"velocity", "current_velocity"}) {
+    auto params = make_linear_parameters();
+    auto &joint = params.hardware_info.joints[0];
+    joint.command_interfaces[0].name = mode;
+    if (mode == std::string("current_velocity")) {
+      joint.parameters["startup_current_a"] = "2.0";
+    }
+    VescSystem hardware;
+    EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::SUCCESS);
+  }
+}
+
+TEST_F(SystemConfigurationTest, RejectsIncompleteOrInvalidLinearConfiguration)
+{
+  for (const auto &name : {"linear_lead_m_per_rev", "max_velocity", "velocity_slew_rate"}) {
+    auto params = make_linear_parameters();
+    params.hardware_info.joints[0].parameters.erase(name);
+    VescSystem hardware;
+    EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
+  }
+  for (const auto &[name, value] :
+    {std::pair{"linear_lead_m_per_rev", "0"}, {"linear_lead_m_per_rev", "-0.005"},
+      {"linear_lead_m_per_rev", "nan"}, {"linear_lead_m_per_rev", "1e-300"},
+      {"position_offset_m", "nan"}, {"velocity_slew_rate", "1e308"}, {"max_velocity", "0"},
+      {"zero_offset_rad", "0"}, {"min_position", "0"}, {"max_position", "0.3"}}) {
+    SCOPED_TRACE(std::string(name) + "=" + value);
+    auto params = make_linear_parameters();
+    params.hardware_info.joints[0].parameters[name] = value;
+    VescSystem hardware;
+    EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
+  }
+  for (const auto &mode : {"position", "current", "duty_cycle"}) {
+    auto params = make_linear_parameters();
+    auto &joint = params.hardware_info.joints[0];
+    joint.command_interfaces[0].name = mode;
+    joint.state_interfaces[0].name = mode;
+    VescSystem hardware;
+    EXPECT_EQ(hardware.init(params), hardware_interface::CallbackReturn::ERROR);
+  }
+  auto params = make_linear_parameters();
+  params.hardware_info.original_xml.clear();
+  VescSystem missing_urdf;
+  EXPECT_EQ(missing_urdf.init(params), hardware_interface::CallbackReturn::ERROR);
+}
 
 TEST_F(SystemConfigurationTest, PositionDefaultsPreservePiPrecision)
 {

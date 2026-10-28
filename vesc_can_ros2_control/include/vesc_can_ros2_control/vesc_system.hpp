@@ -3,12 +3,15 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "hardware_interface/system_interface.hpp"
 #include "vesc_can_driver/driver_core.hpp"
 #include "vesc_can_driver/vesc_node.hpp"
+#include "vesc_can_ros2_control/joint_conversion.hpp"
+#include "vesc_can_ros2_control/position_controller.hpp"
 
 namespace vesc_can_ros2_control
 {
@@ -72,8 +75,12 @@ private:
   /// @brief 対応 STATUS の鮮度と方向を反映して interface の値を返す
   /// @return 取得できる値，欠測・期限切れでは NaN
   double read_state_value(const StateHandle &binding, vesc_can_driver::TimePoint steady_now) const;
+  double joint_position(std::size_t motor_idx) const;
+  double joint_velocity(std::size_t motor_idx) const;
 
   std::vector<vesc_can_driver::MotorConfig> configs_;
+  std::vector<JointConversion> conversions_;
+  std::vector<std::optional<PositionController>> position_controllers_;
   std::vector<vesc_can_driver::MotorState> states_;
   std::vector<vesc_can_driver::MotorState> pub_states_;  // CAN executor only
   std::vector<double> cmds_;

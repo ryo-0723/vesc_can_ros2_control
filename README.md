@@ -56,6 +56,9 @@ CANの送受信には `can_msgs/msg/Frame` を使います
 
 こちらを使うときは、通常ノードを起動しません
 URDFの各jointに、論理IDの `logical_id` とCAN IDの `motor_id` を指定します
+直動 joint は速度指令を m/s、位置・速度の状態を m・m/s で扱えます。
+位置指令 [m] には、電流出力の位置 PID と参照軌道の速度・加速度制限を使えます。
+対応範囲と設定例は [直動 joint](vesc_can_ros2_control/README.md#直動-jointprismatic) を参照してください。
 
 ```bash
 ros2 launch vesc_can_ros2_control vesc_control.launch.py use_mock:=true \

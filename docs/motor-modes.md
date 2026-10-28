@@ -6,6 +6,14 @@ VESC 自体の全制御機能を提供する API ではありません。モー�
 実行中のモード切り替えは実装していません。設定変更後は通常ノードを再起動するか、
 URDF を変更して hardware を再ロードします。
 
+以下は回転 joint と通常ノードの単位です。ros2_control の直動 joint は
+`velocity` / `current_velocity` の指令・速度 state を m/s、位置 state を m に換算します。
+直動の `position` はホスト側の加減速制限・位置 PID から電流指令を作る方式で、
+指令は m、フィードバックは STATUS5 の積算位置と STATUS1 の速度です。
+下表の単回転 `SET_POS` と位置モードの制約は、回転 joint と通常ノードに適用されます。
+設定と対応範囲は [直動 joint](../vesc_can_ros2_control/README.md#直動-jointprismatic) を参照してください。
+`VescState` の角度・角速度フィールドは直動でも rad / rad/s のままです。
+
 | モード | 主な用途 | ROS 指令 | CAN 指令 | 有効化・継続動作に必要な状態 |
 |---|---|---|---|---|
 | `current` | モータ電流の直接指令 | モータ A、正負は関節方向 | `SET_CURRENT` | STATUS1。位置状態が必要なら STATUS5 も必要 |
